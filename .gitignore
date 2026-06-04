@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Local runtime output.
+runtime/
+build/
+
+# Local editor and environment files.
+.env
+.venv/
+venv/

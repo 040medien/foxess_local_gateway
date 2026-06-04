@@ -1,0 +1,25 @@
+[Unit]
+Description=FoxESS M1 local cloud daemon
+Documentation=file:/opt/foxess-local-cloud/LOCAL_CLOUD_PI.md
+After=network-online.target foxess-pi-ap.service foxess-hostapd.service
+Wants=network-online.target foxess-pi-ap.service foxess-hostapd.service
+
+[Service]
+Type=simple
+User=foxess
+Group=foxess
+WorkingDirectory=/opt/foxess-local-cloud
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/foxess-local-cloud/venv/bin/python -m foxess_local_cloud.main --config /etc/foxess-local-cloud/config.json
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/foxess-local-cloud /var/log/foxess-local-cloud /etc/foxess-local-cloud
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

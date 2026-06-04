@@ -1,0 +1,9 @@
+interface=${AP_IFACE}
+bind-dynamic
+domain-needed
+bogus-priv
+dhcp-authoritative
+dhcp-range=${AP_DHCP_START},${AP_DHCP_END},${AP_DHCP_LEASE}
+dhcp-option=option:router,${AP_ADDRESS}
+dhcp-option=option:dns-server,${AP_ADDRESS}
+${DNSMASQ_ADDRESS_LINES}

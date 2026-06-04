@@ -1,0 +1,26 @@
+{
+  "host": "0.0.0.0",
+  "port": 14431,
+  "cert": "runtime/foxess-local-cloud-cert.pem",
+  "key": "runtime/foxess-local-cloud-key.pem",
+  "jsonl": "runtime/foxess-local-cloud.jsonl",
+  "publish_min_interval_seconds": 0,
+  "relay": {
+    "enabled": false,
+    "upstreams": {
+      "8.209.116.72": "8.209.116.72:14431",
+      "47.91.86.144": "47.91.86.144:14431"
+    }
+  },
+  "devices": {},
+  "mqtt": {
+    "host": "",
+    "port": 1883,
+    "username": null,
+    "password": null,
+    "discovery_prefix": "homeassistant",
+    "topic_prefix": "foxess_m1",
+    "retain": true,
+    "debug": false
+  }
+}

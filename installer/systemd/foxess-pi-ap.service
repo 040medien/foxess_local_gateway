@@ -1,0 +1,15 @@
+[Unit]
+Description=FoxESS inverter Wi-Fi AP and redirect setup
+Documentation=file:/opt/foxess-local-cloud/LOCAL_CLOUD_PI.md
+After=NetworkManager.service systemd-networkd.service
+Wants=network-online.target
+Before=foxess-hostapd.service foxess-local-cloud.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/foxess-pi-ap start
+ExecStop=/usr/local/sbin/foxess-pi-ap stop
+
+[Install]
+WantedBy=multi-user.target
