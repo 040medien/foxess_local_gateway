@@ -222,6 +222,25 @@ print(str(network))
 PY
 }
 
+prepare_preview_dir() {
+  local target=$1 marker
+  [[ -n "$target" && "$target" = /* ]] || die "preview dir must resolve to an absolute path"
+  case "$target" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var)
+      die "refusing unsafe preview dir: $target"
+      ;;
+  esac
+  marker="$target/.foxess-local-cloud-preview"
+  if [[ -e "$target" && ! -e "$marker" ]]; then
+    if find "$target" -mindepth 1 -maxdepth 1 | read -r _; then
+      die "preview dir exists and is not marked as disposable: $target"
+    fi
+  fi
+  rm -rf "$target"
+  mkdir -p "$target"
+  printf 'FoxESS local cloud installer preview directory\n' >"$marker"
+}
+
 unique_words() {
   python3 - "$@" <<'PY'
 import sys
@@ -405,7 +424,7 @@ if [[ "$DRY_RUN" = 1 ]]; then
   if [[ "$TARGET" != /* ]]; then
     TARGET="$ROOT_DIR/$TARGET"
   fi
-  rm -rf "$TARGET"
+  prepare_preview_dir "$TARGET"
   mkdir -p "$TARGET"/{etc/foxess-local-cloud,etc/dnsmasq.d,etc/hostapd,etc/NetworkManager/conf.d,etc/systemd/system,usr/local/sbin,opt}
 else
   TARGET=

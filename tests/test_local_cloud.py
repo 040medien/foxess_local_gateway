@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from foxess_local_cloud.config import MqttConfig, load_config
-from foxess_local_cloud.mqtt import MqttPublisher
+from foxess_local_cloud.config import AppConfig, MqttConfig, RelayConfig, load_config
+from foxess_local_cloud.mqtt import MqttPublisher, metadata_for
 from foxess_local_cloud.protocol import (
     BootstrapResponder,
     extract_frames,
@@ -18,7 +18,8 @@ from foxess_local_cloud.protocol import (
     product_info,
     registration_serial,
 )
-from foxess_local_cloud.telemetry import Telemetry, decode_telemetry
+from foxess_local_cloud.server import FoxessLocalCloud, Session
+from foxess_local_cloud.telemetry import Telemetry, decode_telemetry, u32_wordswapped
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +124,9 @@ class FakeMqttClient:
     def username_pw_set(self, *args: object) -> None:
         self.calls.append(("username_pw_set", args, {}))
 
+    def will_set(self, *args: object, **kwargs: object) -> None:
+        self.calls.append(("will_set", args, kwargs))
+
     def connect_async(self, *args: object) -> None:
         self.calls.append(("connect_async", args, {}))
         if self.fail_connect:
@@ -146,13 +150,25 @@ class FakeMqttClient:
         return Result()
 
 
+class FakeStreamWriter:
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+
 class LocalCloudProtocolTest(unittest.TestCase):
     def test_config_loads_relay_and_mqtt(self) -> None:
         cfg = load_config(ROOT / "local-cloud.example.json")
         self.assertFalse(cfg.relay.enabled)
         self.assertEqual(cfg.relay.upstreams["8.209.116.72"], ("8.209.116.72", 14431))
         self.assertEqual(cfg.devices, {})
-        self.assertTrue(cfg.mqtt.retain)
+        self.assertFalse(cfg.mqtt.retain)
+        self.assertEqual(cfg.mqtt.expire_after_seconds, 300)
         self.assertFalse(cfg.mqtt.debug)
 
     def test_bootstrap_responder_matches_expected_shape(self) -> None:
@@ -181,6 +197,16 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(telemetry.r_voltage_v, 230.0)
         self.assertEqual(telemetry.generation_kwh, 10.0)
 
+    def test_generation_uses_word_swapped_u32_counter(self) -> None:
+        payload = bytearray(telemetry_payload())
+        payload[70:72] = (1).to_bytes(2, "big")
+        payload[72:74] = (1).to_bytes(2, "big")
+
+        telemetry = decode_telemetry(bytes(payload), TEST_SERIAL, "M1-800-E")
+
+        self.assertEqual(u32_wordswapped(payload, 70), 65537)
+        self.assertEqual(telemetry.generation_kwh, round(65537 / 128.0, 3))
+
     def test_product_info_frame_extracts_model(self) -> None:
         frame = extract_frames(bytearray(product_info_frame()))[0]
         info = product_info(frame)
@@ -203,6 +229,44 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertNotIn("pv3_power_w", state)
         self.assertNotIn("pv4_power_w", state)
 
+    def test_relay_falls_back_to_public_original_destination(self) -> None:
+        app = FoxessLocalCloud(
+            AppConfig(
+                relay=RelayConfig(
+                    enabled=True,
+                    upstreams={
+                        "8.209.116.72": ("8.209.116.72", 14431),
+                        "47.91.86.144": ("47.91.86.144", 14431),
+                    },
+                    fallback_to_original_destination=True,
+                )
+            )
+        )
+        session = Session(app, 1)
+
+        self.assertEqual(session.choose_upstream("8.209.116.72"), ("8.209.116.72", 14431))
+        self.assertEqual(session.choose_upstream("8.8.4.4"), ("8.8.4.4", 14431))
+        self.assertIsNone(session.choose_upstream("192.168.50.1"))
+
+
+class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_crc_frame_is_not_acked_or_accepted(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        writer = FakeStreamWriter()
+        raw = bytearray(registration_frame())
+        raw[-3] ^= 0xFF
+        frame = extract_frames(raw)[0]
+
+        await session.handle_frame(frame, writer)  # type: ignore[arg-type]
+
+        self.assertFalse(frame.valid_crc)
+        self.assertIsNone(session.serial)
+        self.assertEqual(writer.writes, [])
+        self.assertTrue(any(event == "invalid_crc" for event, _fields in events))
+
 
 class MqttPublisherTest(unittest.TestCase):
     def test_mqtt_connect_uses_async_reconnect_loop(self) -> None:
@@ -219,6 +283,7 @@ class MqttPublisherTest(unittest.TestCase):
 
         self.assertIn(("reconnect_delay_set", (), {"min_delay": 1, "max_delay": 60}), client.calls)
         self.assertIn(("username_pw_set", ("user", "pass"), {}), client.calls)
+        self.assertIn(("will_set", ("foxess_m1/status", "offline"), {"retain": True}), client.calls)
         self.assertIn(("connect_async", ("mqtt.local", 1883), {}), client.calls)
         self.assertIn(("loop_start", (), {}), client.calls)
         self.assertEqual(events[0][0], "mqtt_connecting")
@@ -270,6 +335,9 @@ class MqttPublisherTest(unittest.TestCase):
         discovery_payloads = [json.loads(payload) for topic, payload, retain in client.published if topic.endswith("/config") and retain and payload]
         self.assertTrue(any(payload["device"]["model"] == "Q1-1200-E" for payload in discovery_payloads))
         self.assertTrue(any(payload["unique_id"].endswith("_pv4_power_w") for payload in discovery_payloads))
+        self.assertTrue(any(payload["object_id"].endswith("_pv4_power_w") for payload in discovery_payloads))
+        self.assertTrue(all(payload["availability_topic"] == "foxess_m1/Q1SERIAL000001/availability" for payload in discovery_payloads))
+        self.assertTrue(any(payload.get("expire_after") == 300 for payload in discovery_payloads if payload["unique_id"].endswith("_pv4_power_w")))
 
     def test_mqtt_republishes_discovery_when_model_is_later_detected(self) -> None:
         client = FakeMqttClient()
@@ -290,10 +358,10 @@ class MqttPublisherTest(unittest.TestCase):
         self.assertGreater(len(discovery_payloads), first_discovery_count)
         self.assertTrue(any(payload["device"]["model"] == "M1-800-E" for payload in discovery_payloads))
 
-    def test_mqtt_publishes_retained_scalar_topics(self) -> None:
+    def test_mqtt_publishes_state_scalar_topics_and_availability(self) -> None:
         client = FakeMqttClient()
         publisher = MqttPublisher(
-            MqttConfig(host="mqtt.local", retain=True),
+            MqttConfig(host="mqtt.local", retain=False),
             {TEST_SERIAL: "Test Inverter"},
             client_factory=lambda: client,
         )
@@ -302,11 +370,12 @@ class MqttPublisherTest(unittest.TestCase):
         publisher.publish(sample_telemetry())
 
         published = {topic: (payload, retain) for topic, payload, retain in client.published}
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/state"][1], True)
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/power"], ("2", True))
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/ac/export_power"], ("1", True))
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/1/power"], ("1", True))
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/2/current"], ("0.1", True))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/state"][1], False)
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/availability"], ("online", False))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/power"], ("2", False))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/ac/export_power"], ("1", False))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/1/power"], ("1", False))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/2/current"], ("0.1", False))
         state = json.loads(published[f"foxess_m1/{TEST_SERIAL}/state"][0])
         self.assertIn("export_power_w", state)
         self.assertNotIn("sequence", state)
@@ -331,7 +400,7 @@ class MqttPublisherTest(unittest.TestCase):
         names_by_id = {payload["unique_id"]: payload["name"] for payload in discovery_payloads}
         self.assertIn("sequence", state)
         self.assertIn("raw_u16_002", state)
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/sequence"], ("1", True))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/sequence"], ("1", False))
         self.assertIn(f"foxess_{TEST_SERIAL}_raw_u16_002", discovery_ids)
         self.assertEqual(names_by_id[f"foxess_{TEST_SERIAL}_export_power_w"], "Export Power")
 
@@ -348,6 +417,9 @@ class MqttPublisherTest(unittest.TestCase):
         publisher._on_connect(None, None, None, "Not authorized")
 
         self.assertEqual([event for event, _fields in events], ["mqtt_connected", "mqtt_connect_failed"])
+
+    def test_generation_metadata_uses_total_increasing_for_lifetime_counter(self) -> None:
+        self.assertEqual(metadata_for("generation_kwh"), ("kWh", "energy", "total_increasing"))
 
 
 class InstallerTest(unittest.TestCase):
@@ -395,12 +467,21 @@ class InstallerTest(unittest.TestCase):
 
             ap_helper = (Path(tmpdir) / "usr/local/sbin/foxess-pi-ap").read_text(encoding="utf-8")
             self.assertIn("find_cmd iw /usr/sbin/iw /sbin/iw", ap_helper)
+            self.assertIn('phy=$("$IW" dev "$STA_IFACE" info', ap_helper)
             self.assertIn('"$NFT" add rule inet "$NFT_TABLE" prerouting', ap_helper)
 
             status_script = (Path(tmpdir) / "usr/local/sbin/foxess-gateway-status").read_text(encoding="utf-8")
             self.assertIn('section "Services"', status_script)
             self.assertIn("foxess-local-cloud.service", status_script)
             self.assertIn("Passphrase=<stored in", status_script)
+
+            local_cloud_unit = (Path(tmpdir) / "etc/systemd/system/foxess-local-cloud.service").read_text(encoding="utf-8")
+            self.assertIn("After=network-online.target foxess-pi-ap.service", local_cloud_unit)
+            self.assertNotIn("foxess-hostapd.service", local_cloud_unit)
+
+            hostapd_unit = (Path(tmpdir) / "etc/systemd/system/foxess-hostapd.service").read_text(encoding="utf-8")
+            self.assertIn("After=foxess-pi-ap.service foxess-local-cloud.service", hostapd_unit)
+            self.assertIn("Requires=foxess-pi-ap.service foxess-local-cloud.service", hostapd_unit)
 
             logrotate = (Path(tmpdir) / "etc/logrotate.d/foxess-local-cloud").read_text(encoding="utf-8")
             self.assertIn("/var/log/foxess-local-cloud/*.jsonl", logrotate)
@@ -432,6 +513,53 @@ class InstallerTest(unittest.TestCase):
             passphrase = next(line.split("=", 1)[1] for line in credentials.splitlines() if line.startswith("Passphrase="))
             self.assertEqual(len(passphrase), 32)
             self.assertIn("Generated=1", credentials)
+
+    def test_pi_installer_refuses_nonempty_unmarked_preview_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preview = Path(tmpdir) / "preview"
+            preview.mkdir()
+            sentinel = preview / "sentinel.txt"
+            sentinel.write_text("keep me", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "installer/install_pi_zero_gateway.sh"),
+                    "--dry-run",
+                    "--preview-dir",
+                    str(preview),
+                    "--skip-app-copy",
+                    "--non-interactive",
+                    "--ap-channel",
+                    "6",
+                ],
+                cwd=ROOT,
+                text=True,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not marked as disposable", result.stderr)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep me")
+
+    def test_pi_installer_refuses_system_preview_dir(self) -> None:
+        result = subprocess.run(
+            [
+                str(ROOT / "installer/install_pi_zero_gateway.sh"),
+                "--dry-run",
+                "--preview-dir",
+                "/etc",
+                "--skip-app-copy",
+                "--non-interactive",
+                "--ap-channel",
+                "6",
+            ],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing unsafe preview dir", result.stderr)
 
     def test_pi_installer_preserves_existing_ap_passphrase(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

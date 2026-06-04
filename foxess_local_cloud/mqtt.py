@@ -43,6 +43,8 @@ class MqttPublisher:
             self.client.reconnect_delay_set(min_delay=1, max_delay=60)
         if self.config.username:
             self.client.username_pw_set(self.config.username, self.config.password)
+        if hasattr(self.client, "will_set"):
+            self.client.will_set(f"{self.config.topic_prefix}/status", "offline", retain=True)
         try:
             if hasattr(self.client, "connect_async"):
                 self.client.connect_async(self.config.host, self.config.port)
@@ -61,6 +63,8 @@ class MqttPublisher:
     def _on_connect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         event = "mqtt_connected" if reason_is_success(reason_code) else "mqtt_connect_failed"
         self.emit(event, host=self.config.host, port=self.config.port, reason=str(reason_code))
+        if event == "mqtt_connected" and self.client is not None:
+            self._publish(f"{self.config.topic_prefix}/status", "online", retain=True)
 
     def _on_disconnect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         self.announced.clear()
@@ -88,6 +92,7 @@ class MqttPublisher:
             self.announced.add(telemetry.serial)
         state_topic = f"{self.config.topic_prefix}/{telemetry.serial}/state"
         self._publish(state_topic, json.dumps(self._state_dict(telemetry), separators=(",", ":")), retain=self.config.retain)
+        self._publish(f"{self.config.topic_prefix}/{telemetry.serial}/availability", "online", retain=False)
         self._publish_scalar_topics(telemetry)
 
     def _publish_discovery(self, telemetry: Telemetry) -> None:
@@ -105,10 +110,16 @@ class MqttPublisher:
             payload: dict[str, Any] = {
                 "name": friendly_field_name(field_name),
                 "unique_id": f"foxess_{serial}_{field_name}",
+                "object_id": f"foxess_{serial}_{field_name}",
                 "state_topic": state_topic,
                 "value_template": "{{ value_json." + field_name + " }}",
+                "availability_topic": f"{self.config.topic_prefix}/{serial}/availability",
+                "payload_available": "online",
+                "payload_not_available": "offline",
                 "device": device,
             }
+            if self.config.expire_after_seconds is not None:
+                payload["expire_after"] = self.config.expire_after_seconds
             unit, device_class, state_class = metadata_for(field_name)
             if unit:
                 payload["unit_of_measurement"] = unit

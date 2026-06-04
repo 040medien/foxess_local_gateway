@@ -14,6 +14,12 @@ def s16(payload: bytes, offset: int) -> int:
     return int.from_bytes(payload[offset : offset + 2], "big", signed=True)
 
 
+def u32_wordswapped(payload: bytes, offset: int) -> int:
+    low = u16(payload, offset)
+    high = u16(payload, offset + 2)
+    return (high << 16) | low
+
+
 @dataclass(frozen=True)
 class Telemetry:
     serial: str
@@ -102,7 +108,7 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "") -> Telem
         pv4_voltage_v=pv4_voltage_v if include_pv34 else None,
         pv4_current_a=pv4_current_a if include_pv34 else None,
         inverter_temperature_c=round(u16(payload, 62) / 32.0, 2),
-        generation_kwh=round(u16(payload, 70) / 128.0, 3),
+        generation_kwh=round(u32_wordswapped(payload, 70) / 128.0, 3),
         sequence=u16(payload, 66),
         raw_u16_000=u16(payload, 0),
         raw_u16_002=u16(payload, 2),
