@@ -659,7 +659,11 @@ class InstallerTest(unittest.TestCase):
                             "port": 1884,
                             "username": "foxess",
                             "password": "secret",
-                        }
+                        },
+                        "devices": {
+                            "60TESTSERIAL0001": "PrivateAlias1",
+                            "60TESTSERIAL000": "PrivateAlias",
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -690,6 +694,13 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(cfg.mqtt.port, 1884)
             self.assertEqual(cfg.mqtt.username, "foxess")
             self.assertEqual(cfg.mqtt.password, "secret")
+            self.assertEqual(
+                cfg.devices,
+                {
+                    "60TESTSERIAL0001": "PrivateAlias1",
+                    "60TESTSERIAL000": "PrivateAlias",
+                },
+            )
 
 
 if __name__ == "__main__":

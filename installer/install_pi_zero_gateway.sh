@@ -181,6 +181,25 @@ elif enabled is False:
 PY
 }
 
+existing_devices_json() {
+  local config_path=${1:-$CONFIG_DIR/config.json}
+  python3 - "$config_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError):
+    print("{}")
+    raise SystemExit(0)
+devices = data.get("devices") or {}
+if not isinstance(devices, dict):
+    devices = {}
+print(json.dumps({str(key): str(value) for key, value in devices.items()}, indent=4))
+PY
+}
+
 preserve_existing_relay_config() {
   local existing_config=${FOXESS_EXISTING_CONFIG:-$CONFIG_DIR/config.json}
   local existing_value
@@ -413,11 +432,13 @@ FOXESS_CLOUD_HOSTS=$(unique_words "$FOXESS_CLOUD_HOSTS" | paste -sd' ' -)
 MQTT_USERNAME_JSON=$(json_string_or_null "$MQTT_USERNAME")
 MQTT_PASSWORD_JSON=$(json_string_or_null "$MQTT_PASSWORD")
 RELAY_UPSTREAMS_JSON=$(json_relay_upstreams)
+DEVICES_JSON=$(existing_devices_json "${FOXESS_EXISTING_CONFIG:-$CONFIG_DIR/config.json}")
 DNSMASQ_ADDRESS_LINES=$(dnsmasq_address_lines)
 export AP_SSID AP_PASSPHRASE AP_PASSPHRASE_GENERATED AP_IFACE STA_IFACE AP_ADDRESS AP_CIDR AP_SUBNET AP_CHANNEL
 export AP_DHCP_START AP_DHCP_END AP_DHCP_LEASE FOXESS_CLOUD_IPS ENABLE_NAT ENABLE_REDIRECT
 export DAEMON_PORT=14431 MQTT_HOST MQTT_PORT MQTT_USERNAME_JSON MQTT_PASSWORD_JSON
 export PUBLISH_MIN_INTERVAL_SECONDS RELAY_ENABLED RELAY_UPSTREAMS_JSON DNSMASQ_ADDRESS_LINES
+export DEVICES_JSON
 
 if [[ "$DRY_RUN" = 1 ]]; then
   TARGET="${PREVIEW_DIR:-$ROOT_DIR/build/pi-install-preview}"
