@@ -10,7 +10,7 @@
     "fallback_to_original_destination": true,
     "upstreams": ${RELAY_UPSTREAMS_JSON}
   },
-  "devices": {},
+  "devices": ${DEVICES_JSON},
   "mqtt": {
     "host": "${MQTT_HOST}",
     "port": ${MQTT_PORT},
