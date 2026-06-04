@@ -57,9 +57,7 @@ start_nft() {
   "$NFT" "add chain inet $NFT_TABLE postrouting { type nat hook postrouting priority srcnat; policy accept; }"
 
   if [ "$ENABLE_REDIRECT" = "1" ]; then
-    for dst in $FOXESS_CLOUD_IPS; do
-      "$NFT" add rule inet "$NFT_TABLE" prerouting iifname "$AP_IFACE" ip saddr "$AP_SUBNET" ip daddr "$dst" tcp dport 14431 counter redirect to :"$DAEMON_PORT"
-    done
+    "$NFT" add rule inet "$NFT_TABLE" prerouting iifname "$AP_IFACE" ip saddr "$AP_SUBNET" tcp dport 14431 counter redirect to :"$DAEMON_PORT"
   fi
 
   if [ "$ENABLE_NAT" = "1" ]; then

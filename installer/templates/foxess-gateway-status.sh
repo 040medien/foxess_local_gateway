@@ -94,7 +94,7 @@ else
 fi
 
 section "Redirects"
-printf 'redirect_enabled=%s nat_enabled=%s ap_subnet=%s cloud_ips="%s"\n' "$ENABLE_REDIRECT" "$ENABLE_NAT" "$AP_SUBNET" "$FOXESS_CLOUD_IPS"
+printf 'redirect_enabled=%s nat_enabled=%s ap_subnet=%s tcp_port=14431 relay_upstream_hints="%s"\n' "$ENABLE_REDIRECT" "$ENABLE_NAT" "$AP_SUBNET" "$FOXESS_CLOUD_IPS"
 if [ -n "$NFT" ]; then
   "$NFT" list table inet "$NFT_TABLE" 2>/dev/null || echo "nft table missing or not readable"
 else

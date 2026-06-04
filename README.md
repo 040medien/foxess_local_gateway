@@ -26,7 +26,7 @@ client. No FoxESS Cloud API key is needed.
 The Raspberry Pi runs three pieces:
 
 - `hostapd`/`dnsmasq` for an inverter-only Wi-Fi AP.
-- Narrow nftables redirects for known FoxESS TCP/14431 cloud destinations.
+- Narrow nftables redirects for any TCP/14431 cloud destinations.
 - `foxess-local-cloud`, a Python daemon that decodes telemetry and publishes
   MQTT state.
 

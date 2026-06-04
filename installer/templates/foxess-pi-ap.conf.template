@@ -6,6 +6,8 @@ AP_CIDR=${AP_CIDR}
 AP_SUBNET=${AP_SUBNET}
 AP_CHANNEL=${AP_CHANNEL}
 FOXESS_CLOUD_IPS="${FOXESS_CLOUD_IPS}"
+# TCP/14431 redirect matches all clients on AP_SUBNET. FOXESS_CLOUD_IPS is kept
+# as relay upstream metadata for the daemon config/status output.
 ENABLE_NAT=${ENABLE_NAT}
 ENABLE_REDIRECT=${ENABLE_REDIRECT}
 DAEMON_PORT=${DAEMON_PORT}

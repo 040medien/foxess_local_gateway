@@ -47,7 +47,7 @@ Usage: sudo installer/install_pi_zero_gateway.sh [options]
 Configures a Raspberry Pi Zero W as a FoxESS inverter Wi-Fi gateway:
   - creates a virtual AP interface, usually ap0
   - runs hostapd/dnsmasq for inverter Wi-Fi and DHCP
-  - redirects known FoxESS cloud TCP/14431 IPs to the local daemon
+  - redirects AP-client TCP/14431 traffic to the local daemon
   - installs foxess_local_cloud as a systemd service
 
 Options:
@@ -73,8 +73,8 @@ Options:
   --publish-min-interval SECONDS    Optional MQTT publish throttle
   --relay                           Enable daemon relay mode in generated config
   --no-relay                        Disable daemon relay mode even if existing config enables it
-  --foxess-cloud-ip IP              Add a known FoxESS cloud IP to redirect; repeatable
-  --foxess-cloud-host HOST          Resolve and redirect this FoxESS host; repeatable
+  --foxess-cloud-ip IP              Add a FoxESS relay upstream hint; repeatable
+  --foxess-cloud-host HOST          Resolve this host as a FoxESS relay upstream hint; repeatable
   --no-nat                          Disable NAT from inverter AP to upstream Wi-Fi
   --no-redirect                     Disable local TCP/14431 redirect rules
   --help                            Show this help
@@ -447,7 +447,8 @@ else
   echo "  AP key:    provided; saved to $WIFI_CREDENTIALS_FILE"
 fi
 echo "  Upstream:  $STA_IFACE"
-echo "  Redirect:  $ENABLE_REDIRECT for $FOXESS_CLOUD_IPS tcp/14431"
+echo "  Redirect:  $ENABLE_REDIRECT for AP-client tcp/14431"
+echo "  Upstreams: $FOXESS_CLOUD_IPS"
 echo "  MQTT:      ${MQTT_HOST:-disabled}"
 echo "  Relay:     $RELAY_ENABLED"
 
