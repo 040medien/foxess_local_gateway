@@ -41,6 +41,11 @@ Raspberry Pi Zero W
         v
 FoxESS inverter Wi-Fi
 ```
+## Screenshots
+
+![MQTT auto discovered entities in Home Assistant](docs/images/screenshot_entities.png)
+![Example graph in Home Assistant](docs/images/screenshot_graph.png)
+
 
 ## What You need
 - A Raspberry Pi (old Zero W is fine) in reception range of your inverter(s) and your home wifi
