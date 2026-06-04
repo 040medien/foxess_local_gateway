@@ -9,7 +9,7 @@ inverter-only Wi-Fi AP:
 LAN / MQTT broker <-> wlan0  Raspberry Pi Zero W  ap0 <-> FoxESS inverter
 ```
 
-The inverter connects to the Pi AP. Any TCP/14431 cloud destinations are
+The inverter connects to the Pi AP. TCP/14431 connections from AP clients are
 redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
@@ -120,13 +120,13 @@ Default redirects:
 
 ```text
 source:      inverter AP subnet, default 192.168.50.0/24
-destination: any TCP/14431 cloud IPs
-destination: current IPv4 answers for foxesscloud.com tcp/14431
+destination: any TCP/14431 destination reached by AP clients
 target:      local daemon port 14431
 ```
 
-Add more destinations only if you know your inverter uses them, using 
-`--foxess-cloud-ip` or `--foxess-cloud-host`.
+`--foxess-cloud-ip` and `--foxess-cloud-host` are relay upstream hints for the
+daemon config and status output. They do not limit which AP-client TCP/14431
+connections are redirected.
 
 NAT is enabled by default for non-redirected inverter traffic so relay mode can
 reach the upstream LAN.

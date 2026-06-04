@@ -26,7 +26,7 @@ client. No FoxESS Cloud API key is needed.
 The Raspberry Pi runs three pieces:
 
 - `hostapd`/`dnsmasq` for an inverter-only Wi-Fi AP.
-- Narrow nftables redirects for any TCP/14431 cloud destinations.
+- A narrow nftables redirect for TCP/14431 traffic from the inverter AP subnet.
 - `foxess-local-cloud`, a Python daemon that decodes telemetry and publishes
   MQTT state.
 
@@ -87,7 +87,7 @@ Not yet tested (please let me know if you were able to test it):
 
 - Install the Home Assistant [Mosquitto Broker app](https://www.home-assistant.io/integrations/mqtt/)
 - Create additional mqtt credentials in Mosquitto for this gateway (to be used during the install described below)
-- Note your Home Assistant ip / host name (e.g. homeassistant.local)
+- Note your MQTT broker IP address or host name.
 
 ## Install On Raspberry Pi
 
@@ -95,8 +95,8 @@ Start with Raspberry Pi OS Lite (Trixie). Configure normal Wi-Fi and SSH using R
 Pi Imager, then ssh into the pi and clone this repository:
 
 ```bash
-git clone https://github.com/040medien/foxess-m1-local-gateway
-cd foxess-m1-local-gateway
+git clone https://github.com/040medien/foxess_local_gateway
+cd foxess_local_gateway
 ```
 
 Then run:
@@ -104,7 +104,7 @@ Then run:
 ```bash
 sudo ./installer/install_pi_zero_gateway.sh \
   --ap-ssid FoxESS-Local \
-  --mqtt-host homeassistant.local \
+  --mqtt-host mqtt-broker.local \
   --mqtt-username foxess \
   --mqtt-password 'your-mqtt-password'
 ```
@@ -138,6 +138,11 @@ Fresh installs keep cloud relay disabled. With relay disabled, telemetry remains
 local. When installed with `--relay`, the gateway forwards the decrypted session 
 to FoxESS Cloud while still publishing MQTT locally.
 
+The redirect is intentionally broad within the inverter AP: any AP client
+connection to TCP/14431 is sent to the local daemon. That avoids depending on a
+fixed FoxESS cloud IP or DNS answer, while still leaving the rule scoped to the
+isolated inverter Wi-Fi subnet and the FoxESS telemetry port.
+
 ## Connect An Inverter
 
 After installation:
@@ -148,7 +153,7 @@ sudo foxess-gateway-status
 
 Note the AP SSID and passphrase.
 
-For an already-installed inverter, use the FoxESS or Solakon mobile app o
+For an already-installed inverter, use the FoxESS or Solakon mobile app
 to change its Wi-Fi network to the Pi AP. For a new inverter, put its Wi-Fi
 into its normal pairing/config mode and enter the Pi AP SSID and passphrase
 when prompted.
