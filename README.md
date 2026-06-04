@@ -54,6 +54,7 @@ FoxESS inverter Wi-Fi
   - M1-800-E
   - M1-1000-E
   - M1-1200-E
+  - Q1-1600-E (not confirmed)
   - Q1-2000-E (not confirmed)
   - Q1-2400-E (not confirmed)
   - Q1-2500-E (not confirmed)
