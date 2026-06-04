@@ -37,7 +37,12 @@ SYSTEMCTL=$(find_cmd systemctl /usr/bin/systemctl /bin/systemctl)
 
 start_ap_iface() {
   if ! "$IW" dev "$AP_IFACE" info >/dev/null 2>&1; then
-    "$IW" phy phy0 interface add "$AP_IFACE" type __ap
+    phy=$("$IW" dev "$STA_IFACE" info 2>/dev/null | awk '/wiphy/ {print "phy" $2; exit}')
+    if [ -z "$phy" ]; then
+      echo "cannot determine Wi-Fi PHY for $STA_IFACE" >&2
+      exit 1
+    fi
+    "$IW" phy "$phy" interface add "$AP_IFACE" type __ap
   fi
   "$IP" link set "$AP_IFACE" up
   "$IP" addr flush dev "$AP_IFACE"

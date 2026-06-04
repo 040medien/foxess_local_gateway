@@ -16,7 +16,8 @@ class MqttConfig:
     password: str | None = None
     discovery_prefix: str = "homeassistant"
     topic_prefix: str = "foxess_m1"
-    retain: bool = True
+    retain: bool = False
+    expire_after_seconds: int | None = 300
     debug: bool = False
 
 
@@ -38,6 +39,7 @@ class AppConfig:
 class RelayConfig:
     enabled: bool = False
     upstreams: dict[str, tuple[str, int]] = field(default_factory=dict)
+    fallback_to_original_destination: bool = True
     connect_timeout_seconds: float = 10.0
 
 
@@ -81,13 +83,21 @@ def load_config(path: Path | None) -> AppConfig:
             password=mqtt_raw.get("password"),
             discovery_prefix=str(mqtt_raw.get("discovery_prefix", "homeassistant")),
             topic_prefix=str(mqtt_raw.get("topic_prefix", "foxess_m1")),
-            retain=bool(mqtt_raw.get("retain", True)),
+            retain=bool(mqtt_raw.get("retain", False)),
+            expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 300)),
             debug=bool(mqtt_raw.get("debug", False)),
         ),
         publish_min_interval_seconds=float(raw.get("publish_min_interval_seconds", 0.0)),
         relay=RelayConfig(
             enabled=bool(relay_raw.get("enabled", False)),
             upstreams=upstreams,
+            fallback_to_original_destination=bool(relay_raw.get("fallback_to_original_destination", True)),
             connect_timeout_seconds=float(relay_raw.get("connect_timeout_seconds", 10.0)),
         ),
     )
+
+
+def optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)

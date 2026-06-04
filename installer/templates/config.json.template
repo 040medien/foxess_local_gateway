@@ -7,6 +7,7 @@
   "publish_min_interval_seconds": ${PUBLISH_MIN_INTERVAL_SECONDS},
   "relay": {
     "enabled": ${RELAY_ENABLED},
+    "fallback_to_original_destination": true,
     "upstreams": ${RELAY_UPSTREAMS_JSON}
   },
   "devices": {},
@@ -17,7 +18,8 @@
     "password": ${MQTT_PASSWORD_JSON},
     "discovery_prefix": "homeassistant",
     "topic_prefix": "foxess_m1",
-    "retain": true,
+    "retain": false,
+    "expire_after_seconds": 300,
     "debug": false
   }
 }

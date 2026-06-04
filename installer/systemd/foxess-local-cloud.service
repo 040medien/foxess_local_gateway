@@ -1,8 +1,8 @@
 [Unit]
 Description=FoxESS M1 local cloud daemon
 Documentation=file:/opt/foxess-local-cloud/LOCAL_CLOUD_PI.md
-After=network-online.target foxess-pi-ap.service foxess-hostapd.service
-Wants=network-online.target foxess-pi-ap.service foxess-hostapd.service
+After=network-online.target foxess-pi-ap.service
+Wants=network-online.target foxess-pi-ap.service
 
 [Service]
 Type=simple

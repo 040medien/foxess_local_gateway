@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import socket
 import ssl
@@ -164,6 +165,8 @@ class Session:
         upstreams = self.app.config.relay.upstreams
         if original_ip and original_ip in upstreams:
             return upstreams[original_ip]
+        if original_ip and self.app.config.relay.fallback_to_original_destination and is_public_ipv4(original_ip):
+            return (original_ip, 14431)
         if len(upstreams) == 1:
             return next(iter(upstreams.values()))
         return None
@@ -230,6 +233,9 @@ class Session:
             ascii=ascii_text(frame.payload),
             payload_hex=frame.payload.hex(" "),
         )
+        if not frame.valid_crc:
+            self.app.logger.emit("invalid_crc", session=self.session_id, serial=self.serial or "", bytes=len(frame.raw))
+            return
         if is_registration(frame):
             self.serial = registration_serial(frame)
             self.app.logger.emit("registration", session=self.session_id, serial=self.serial or "")
@@ -262,3 +268,11 @@ def original_destination_ip(writer: asyncio.StreamWriter) -> str | None:
         return None
     _family, _port, raw_addr = struct.unpack_from("!HH4s", data)
     return socket.inet_ntoa(raw_addr)
+
+
+def is_public_ipv4(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return address.version == 4 and address.is_global
