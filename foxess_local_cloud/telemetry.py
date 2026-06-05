@@ -20,6 +20,10 @@ def u32_wordswapped(payload: bytes, offset: int) -> int:
     return (high << 16) | low
 
 
+def nonzero_u16_words(payload: bytes) -> dict[str, int]:
+    return {f"{offset:03d}": u16(payload, offset) for offset in range(0, len(payload) - 1, 2) if u16(payload, offset)}
+
+
 @dataclass(frozen=True)
 class Telemetry:
     serial: str
@@ -38,6 +42,8 @@ class Telemetry:
     pv2_current_a: float
     inverter_temperature_c: float
     generation_kwh: float
+    operating_state: str
+    operating_state_code: int
     sequence: int
     raw_u16_000: int
     raw_u16_002: int
@@ -85,6 +91,7 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "") -> Telem
     )
     r_power_w = s16(payload, 6)
     export_power_w = -s16(payload, 2)
+    operating_state_code = u16(payload, 154)
     return Telemetry(
         serial=serial,
         model=model,
@@ -109,6 +116,8 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "") -> Telem
         pv4_current_a=pv4_current_a if include_pv34 else None,
         inverter_temperature_c=round(u16(payload, 62) / 32.0, 2),
         generation_kwh=round(u32_wordswapped(payload, 70) / 128.0, 3),
+        operating_state=operating_state(operating_state_code),
+        operating_state_code=operating_state_code,
         sequence=u16(payload, 66),
         raw_u16_000=u16(payload, 0),
         raw_u16_002=u16(payload, 2),
@@ -126,3 +135,10 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "") -> Telem
 def supports_four_pv(model: str) -> bool:
     normalized = model.upper().replace("_", "-")
     return normalized.startswith("Q1") or "-Q1" in normalized or "Q1-" in normalized
+
+
+def operating_state(code: int) -> str:
+    return {
+        2: "standby",
+        4: "running",
+    }.get(code, "unknown")

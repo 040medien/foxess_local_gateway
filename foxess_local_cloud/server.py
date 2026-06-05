@@ -26,7 +26,7 @@ from .protocol import (
     product_info,
     registration_serial,
 )
-from .telemetry import decode_telemetry
+from .telemetry import decode_telemetry, nonzero_u16_words
 
 
 FOXESS_CIPHERS = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
@@ -96,7 +96,7 @@ class FoxessLocalCloud:
             await writer.wait_closed()
             self.logger.emit("disconnect", session=session_id, serial=session.serial or "")
 
-    def publish_telemetry(self, session_id: int, telemetry: Any) -> None:
+    def publish_telemetry(self, session_id: int, telemetry: Any, raw_nonzero_u16: dict[str, int] | None = None) -> None:
         serial = telemetry.serial
         now = time.time()
         min_interval = self.config.publish_min_interval_seconds
@@ -105,7 +105,10 @@ class FoxessLocalCloud:
             return
         if serial:
             self.last_publish_by_serial[serial] = now
-        self.logger.emit("telemetry", session=session_id, **telemetry.as_dict())
+        fields = telemetry.as_dict()
+        if raw_nonzero_u16 is not None:
+            fields["raw_nonzero_u16"] = raw_nonzero_u16
+        self.logger.emit("telemetry", session=session_id, **fields)
         self.mqtt.publish(telemetry)
 
 
@@ -250,7 +253,7 @@ class Session:
             self.app.logger.emit("bootstrap_ack", session=self.session_id, serial=self.serial or "", bytes=len(response), hex=response.hex(" "))
         if is_telemetry(frame):
             telemetry = decode_telemetry(frame.payload, self.serial or "", self.model)
-            self.app.publish_telemetry(self.session_id, telemetry)
+            self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
             self.last_telemetry_at = time.time()
 
 

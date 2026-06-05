@@ -8,6 +8,8 @@ local connection (TCP/14431), decodes pushed telemetry, and publishes it to MQTT
 with Home Assistant discovery while being connected to your regular wifi as a
 client. No FoxESS Cloud API key is needed.
 
+![FoxESS local gateway architecture](docs/images/illustration.png)
+
 ## Why Use This
 
 - No data leaves your network after initial setup.

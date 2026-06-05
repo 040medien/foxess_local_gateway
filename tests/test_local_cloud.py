@@ -19,7 +19,7 @@ from foxess_local_cloud.protocol import (
     registration_serial,
 )
 from foxess_local_cloud.server import FoxessLocalCloud, Session
-from foxess_local_cloud.telemetry import Telemetry, decode_telemetry, u32_wordswapped
+from foxess_local_cloud.telemetry import Telemetry, decode_telemetry, nonzero_u16_words, u32_wordswapped
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +95,8 @@ def sample_telemetry(serial: str = TEST_SERIAL, model: str | None = "M1-800-E") 
         pv2_current_a=0.1,
         inverter_temperature_c=25.0,
         generation_kwh=1.0,
+        operating_state="running",
+        operating_state_code=4,
         sequence=1,
         raw_u16_000=0,
         raw_u16_002=0,
@@ -196,6 +198,8 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(telemetry.export_power_w, telemetry.r_power_w)
         self.assertEqual(telemetry.r_voltage_v, 230.0)
         self.assertEqual(telemetry.generation_kwh, 10.0)
+        self.assertEqual(telemetry.operating_state, "running")
+        self.assertEqual(telemetry.operating_state_code, 4)
 
     def test_generation_uses_word_swapped_u32_counter(self) -> None:
         payload = bytearray(telemetry_payload())
@@ -206,6 +210,14 @@ class LocalCloudProtocolTest(unittest.TestCase):
 
         self.assertEqual(u32_wordswapped(payload, 70), 65537)
         self.assertEqual(telemetry.generation_kwh, round(65537 / 128.0, 3))
+
+    def test_nonzero_u16_words_uses_byte_offset_keys(self) -> None:
+        words = nonzero_u16_words(telemetry_payload())
+
+        self.assertEqual(words["000"], 65535)
+        self.assertEqual(words["002"], 65413)
+        self.assertEqual(words["154"], 4)
+        self.assertNotIn("004", words)
 
     def test_product_info_frame_extracts_model(self) -> None:
         frame = extract_frames(bytearray(product_info_frame()))[0]
@@ -266,6 +278,20 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session.serial)
         self.assertEqual(writer.writes, [])
         self.assertTrue(any(event == "invalid_crc" for event, _fields in events))
+
+    async def test_telemetry_log_includes_nonzero_raw_words(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+        frame = extract_frames(bytearray(telemetry_frame()))[0]
+
+        await session.handle_frame(frame, FakeStreamWriter())  # type: ignore[arg-type]
+
+        telemetry_events = [fields for event, fields in events if event == "telemetry"]
+        self.assertEqual(len(telemetry_events), 1)
+        self.assertEqual(telemetry_events[0]["raw_nonzero_u16"]["154"], 4)  # type: ignore[index]
 
 
 class MqttPublisherTest(unittest.TestCase):
@@ -374,13 +400,40 @@ class MqttPublisherTest(unittest.TestCase):
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/availability"], ("online", False))
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/power"], ("2", False))
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/ac/export_power"], ("1", False))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/status"], ("running", False))
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/1/power"], ("1", False))
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/2/current"], ("0.1", False))
         state = json.loads(published[f"foxess_m1/{TEST_SERIAL}/state"][0])
         self.assertIn("export_power_w", state)
+        self.assertEqual(state["operating_state"], "running")
         self.assertNotIn("sequence", state)
+        self.assertNotIn("operating_state_code", state)
         self.assertNotIn("raw_u16_002", state)
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/sequence"], ("", True))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/status_code"], ("", True))
+
+    def test_mqtt_discovery_publishes_operating_state_and_running_binary_sensor(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {TEST_SERIAL: "Test Inverter"},
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+
+        publisher.publish(sample_telemetry())
+
+        configs = {
+            topic: json.loads(payload)
+            for topic, payload, retain in client.published
+            if topic.endswith("/config") and retain and payload
+        }
+        state_config = configs[f"homeassistant/sensor/foxess_{TEST_SERIAL}/operating_state/config"]
+        running_config = configs[f"homeassistant/binary_sensor/foxess_{TEST_SERIAL}/running/config"]
+        self.assertEqual(state_config["device_class"], "enum")
+        self.assertEqual(state_config["options"], ["standby", "running", "unknown"])
+        self.assertEqual(running_config["device_class"], "running")
+        self.assertEqual(running_config["value_template"], "{{ 'ON' if value_json.operating_state == 'running' else 'OFF' }}")
 
     def test_mqtt_debug_includes_raw_and_sequence_fields(self) -> None:
         client = FakeMqttClient()
@@ -399,8 +452,10 @@ class MqttPublisherTest(unittest.TestCase):
         discovery_ids = [payload["unique_id"] for payload in discovery_payloads]
         names_by_id = {payload["unique_id"]: payload["name"] for payload in discovery_payloads}
         self.assertIn("sequence", state)
+        self.assertIn("operating_state_code", state)
         self.assertIn("raw_u16_002", state)
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/sequence"], ("1", False))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/status_code"], ("4", False))
         self.assertIn(f"foxess_{TEST_SERIAL}_raw_u16_002", discovery_ids)
         self.assertEqual(names_by_id[f"foxess_{TEST_SERIAL}_export_power_w"], "Export Power")
 
@@ -420,6 +475,9 @@ class MqttPublisherTest(unittest.TestCase):
 
     def test_generation_metadata_uses_total_increasing_for_lifetime_counter(self) -> None:
         self.assertEqual(metadata_for("generation_kwh"), ("kWh", "energy", "total_increasing"))
+
+    def test_operating_state_metadata_uses_enum(self) -> None:
+        self.assertEqual(metadata_for("operating_state"), (None, "enum", None))
 
 
 class InstallerTest(unittest.TestCase):
