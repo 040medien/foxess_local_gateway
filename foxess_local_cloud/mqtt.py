@@ -9,7 +9,8 @@ from .config import MqttConfig
 from .telemetry import Telemetry
 
 
-DEBUG_SCALAR_TOPICS = ("0/sequence",)
+DEBUG_SCALAR_TOPICS = ("0/sequence", "0/status_code")
+OPERATING_STATE_OPTIONS = ("standby", "running", "unknown")
 
 
 class MqttPublisher:
@@ -125,11 +126,35 @@ class MqttPublisher:
                 payload["unit_of_measurement"] = unit
             if device_class:
                 payload["device_class"] = device_class
+            if field_name == "operating_state":
+                payload["options"] = list(OPERATING_STATE_OPTIONS)
             if state_class:
                 payload["state_class"] = state_class
             self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
+        self._publish_running_discovery(telemetry, device, state_topic)
         if not self.config.debug:
             self._clear_debug_discovery(telemetry)
+
+    def _publish_running_discovery(self, telemetry: Telemetry, device: dict[str, Any], state_topic: str) -> None:
+        serial = telemetry.serial
+        config_topic = f"{self.config.discovery_prefix}/binary_sensor/foxess_{serial}/running/config"
+        payload: dict[str, Any] = {
+            "name": "Running",
+            "unique_id": f"foxess_{serial}_running",
+            "object_id": f"foxess_{serial}_running",
+            "state_topic": state_topic,
+            "value_template": "{{ 'ON' if value_json.operating_state == 'running' else 'OFF' }}",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "availability_topic": f"{self.config.topic_prefix}/{serial}/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline",
+            "device_class": "running",
+            "device": device,
+        }
+        if self.config.expire_after_seconds is not None:
+            payload["expire_after"] = self.config.expire_after_seconds
+        self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
 
     def _state_dict(self, telemetry: Telemetry) -> dict[str, Any]:
         state = telemetry.as_dict()
@@ -156,6 +181,7 @@ class MqttPublisher:
             "0/ac/frequency": telemetry.r_frequency_hz,
             "0/temperature": telemetry.inverter_temperature_c,
             "0/yieldtotal": telemetry.generation_kwh,
+            "0/status": telemetry.operating_state,
             "1/power": telemetry.pv1_power_w,
             "1/voltage": telemetry.pv1_voltage_v,
             "1/current": telemetry.pv1_current_a,
@@ -176,6 +202,7 @@ class MqttPublisher:
                 scalar_values[topic_suffix] = value
         if self.config.debug:
             scalar_values["0/sequence"] = telemetry.sequence
+            scalar_values["0/status_code"] = telemetry.operating_state_code
         for topic_suffix, value in scalar_values.items():
             self._publish(f"{base}/{topic_suffix}", str(value), retain=self.config.retain)
         if not self.config.debug:
@@ -207,11 +234,13 @@ def metadata_for(name: str) -> tuple[str | None, str | None, str | None]:
         return "°C", "temperature", "measurement"
     if name.endswith("_kwh"):
         return "kWh", "energy", "total_increasing"
+    if name == "operating_state":
+        return None, "enum", None
     return None, None, None
 
 
 def is_debug_field(name: str) -> bool:
-    return name == "sequence" or name.startswith("raw_")
+    return name in {"sequence", "operating_state_code"} or name.startswith("raw_")
 
 
 def friendly_field_name(name: str) -> str:
@@ -237,6 +266,8 @@ def friendly_field_name(name: str) -> str:
         "pv4_current_a": "PV4 Current",
         "inverter_temperature_c": "Inverter Temperature",
         "generation_kwh": "Total Generation",
+        "operating_state": "Operating State",
+        "operating_state_code": "Operating State Code",
         "sequence": "Sequence",
     }
     if name in explicit:
