@@ -29,6 +29,7 @@ class MqttPublisher:
         self.client: Any = None
         self.announced: set[str] = set()
         self.model_by_serial: dict[str, str] = {}
+        self.device_signature_by_serial: dict[str, tuple[str, str, str]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -84,11 +85,16 @@ class MqttPublisher:
         if not self.enabled or self.client is None or not telemetry.serial:
             return
         known_model = self.model_by_serial.get(telemetry.serial)
+        signature = (telemetry.model or "", telemetry.firmware or "", telemetry.module or "")
+        known_signature = self.device_signature_by_serial.get(telemetry.serial)
         should_announce = telemetry.serial not in self.announced
         if telemetry.model and telemetry.model != known_model:
             should_announce = True
+        if known_signature is not None and signature != known_signature:
+            should_announce = True
         if telemetry.model:
             self.model_by_serial[telemetry.serial] = telemetry.model
+        self.device_signature_by_serial[telemetry.serial] = signature
         if should_announce:
             self._publish_discovery(telemetry)
             self.announced.add(telemetry.serial)
