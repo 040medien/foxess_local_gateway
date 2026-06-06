@@ -117,7 +117,7 @@ class MqttPublisher:
         availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
-            if field_name in {"serial", "model", "firmware", "module", "fault_active", "last_fault_code", "last_fault_timestamp"}:
+            if field_name in {"serial", "model", "firmware", "module", "fault_active", "last_fault_code", "last_fault_message", "last_fault_timestamp"}:
                 continue
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/{field_name}/config"
             payload: dict[str, Any] = {
@@ -209,6 +209,16 @@ class MqttPublisher:
             **common,
         }
         self._publish(code_config_topic, json.dumps(code_payload, separators=(",", ":")), retain=True)
+
+        msg_config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/last_fault_message/config"
+        msg_payload: dict[str, Any] = {
+            "name": "Last Fault Message",
+            "unique_id": f"foxess_{serial}_last_fault_message",
+            "object_id": f"foxess_{serial}_last_fault_message",
+            "value_template": "{{ value_json.last_fault_message }}",
+            **common,
+        }
+        self._publish(msg_config_topic, json.dumps(msg_payload, separators=(",", ":")), retain=True)
 
         ts_config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/last_fault_timestamp/config"
         ts_payload: dict[str, Any] = {
