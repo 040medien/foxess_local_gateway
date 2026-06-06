@@ -280,6 +280,12 @@ presents its own cert with the same subject as the FoxESS cloud cert
 (`CN=monitor`), terminates the TLS session, decodes the binary
 telemetry, and (in relay mode) re-encrypts and forwards to FoxESS Cloud.
 
+Interestingly, the *official* FoxESS Cloud cert is itself self-signed —
+same `CN=monitor` subject, valid for 100 years, identical across all
+known FoxESS upstream IPs. There is no PKI for the inverter to validate
+against in the first place. The relay leg pins that cert by SHA-256
+fingerprint to detect substitution on the Pi → cloud path.
+
 The binary protocol itself was reverse-engineered by capturing the
 cleartext stream and correlating fields with what the FoxESS app and
 Modbus implementations expose. A handful of register offsets in each
