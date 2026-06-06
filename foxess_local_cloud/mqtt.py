@@ -11,6 +11,7 @@ from .telemetry import Telemetry
 
 DEBUG_SCALAR_TOPICS = ("0/sequence", "0/status_code")
 OPERATING_STATE_OPTIONS = ("standby", "running", "unknown")
+LEGACY_DISCOVERY_FIELDS = ("feedin_power_w",)
 
 
 class MqttPublisher:
@@ -93,7 +94,7 @@ class MqttPublisher:
             self.announced.add(telemetry.serial)
         state_topic = f"{self.config.topic_prefix}/{telemetry.serial}/state"
         self._publish(state_topic, json.dumps(self._state_dict(telemetry), separators=(",", ":")), retain=self.config.retain)
-        self._publish(f"{self.config.topic_prefix}/{telemetry.serial}/availability", "online", retain=False)
+        self._publish(f"{self.config.topic_prefix}/{telemetry.serial}/availability", "online", retain=True)
         self._publish_scalar_topics(telemetry)
 
     def _publish_discovery(self, telemetry: Telemetry) -> None:
@@ -103,6 +104,7 @@ class MqttPublisher:
         model = telemetry.model or self.model_by_serial.get(serial) or "FoxESS inverter"
         device = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model}
         state_topic = f"{self.config.topic_prefix}/{serial}/state"
+        availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
             if field_name in {"serial", "model"}:
@@ -114,9 +116,8 @@ class MqttPublisher:
                 "object_id": f"foxess_{serial}_{field_name}",
                 "state_topic": state_topic,
                 "value_template": "{{ value_json." + field_name + " }}",
-                "availability_topic": f"{self.config.topic_prefix}/{serial}/availability",
-                "payload_available": "online",
-                "payload_not_available": "offline",
+                "availability": availability,
+                "availability_mode": "all",
                 "device": device,
             }
             if self.config.expire_after_seconds is not None:
@@ -132,6 +133,7 @@ class MqttPublisher:
                 payload["state_class"] = state_class
             self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
         self._publish_running_discovery(telemetry, device, state_topic)
+        self._clear_legacy_discovery(telemetry)
         if not self.config.debug:
             self._clear_debug_discovery(telemetry)
 
@@ -146,9 +148,8 @@ class MqttPublisher:
             "value_template": "{{ 'ON' if value_json.operating_state == 'running' else 'OFF' }}",
             "payload_on": "ON",
             "payload_off": "OFF",
-            "availability_topic": f"{self.config.topic_prefix}/{serial}/availability",
-            "payload_available": "online",
-            "payload_not_available": "offline",
+            "availability": self._availability_block(serial),
+            "availability_mode": "all",
             "device_class": "running",
             "device": device,
         }
@@ -156,11 +157,30 @@ class MqttPublisher:
             payload["expire_after"] = self.config.expire_after_seconds
         self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
 
+    def _availability_block(self, serial: str) -> list[dict[str, str]]:
+        return [
+            {
+                "topic": f"{self.config.topic_prefix}/status",
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            },
+            {
+                "topic": f"{self.config.topic_prefix}/{serial}/availability",
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            },
+        ]
+
     def _state_dict(self, telemetry: Telemetry) -> dict[str, Any]:
         state = telemetry.as_dict()
         if self.config.debug:
             return state
         return {key: value for key, value in state.items() if not is_debug_field(key)}
+
+    def _clear_legacy_discovery(self, telemetry: Telemetry) -> None:
+        for field_name in LEGACY_DISCOVERY_FIELDS:
+            config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{telemetry.serial}/{field_name}/config"
+            self._publish(config_topic, "", retain=True)
 
     def _clear_debug_discovery(self, telemetry: Telemetry) -> None:
         for field_name in telemetry.as_dict():
@@ -246,7 +266,6 @@ def is_debug_field(name: str) -> bool:
 def friendly_field_name(name: str) -> str:
     explicit = {
         "r_power_w": "AC Power",
-        "feedin_power_w": "Feed-in Power",
         "export_power_w": "Export Power",
         "r_voltage_v": "AC Voltage",
         "r_current_a": "AC Current",
