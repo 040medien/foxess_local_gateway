@@ -19,7 +19,7 @@ from foxess_local_cloud.protocol import (
     registration_serial,
 )
 from foxess_local_cloud.server import FOXESS_UPSTREAM_CERT_SHA256, FoxessLocalCloud, Session, check_upstream_cert
-from foxess_local_cloud.telemetry import Telemetry, decode_telemetry, nonzero_u16_words, u32_wordswapped
+from foxess_local_cloud.telemetry import Telemetry, decode_telemetry, fault_code_for, nonzero_u16_words, u32_wordswapped
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -239,6 +239,17 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(info["family"], "M1")
         self.assertEqual(info["firmware"], "1.80")
 
+    def test_fault_code_for_known_tuple_returns_foxess_codes(self) -> None:
+        self.assertEqual(fault_code_for((4, 20, 28, 24)), "4156,4157")
+
+    def test_fault_code_for_unknown_tuple_returns_raw_hex(self) -> None:
+        result = fault_code_for((4, 33, 33, 0))
+        self.assertTrue(result.startswith("raw:"))
+        self.assertIn("21", result)  # 33 = 0x21
+
+    def test_fault_code_for_all_zeros_is_empty(self) -> None:
+        self.assertEqual(fault_code_for((0, 0, 0, 0)), "")
+
     def test_export_total_decodes_from_offset_74(self) -> None:
         payload = bytearray(telemetry_payload())
         payload[74:76] = (256).to_bytes(2, "big")
@@ -357,6 +368,36 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session.serial)
         self.assertEqual(writer.writes, [])
         self.assertTrue(any(event == "invalid_crc" for event, _fields in events))
+
+    async def test_fault_observed_event_emitted_on_first_active_telemetry(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+
+        # Frame 1: clean telemetry, no fault → no fault_observed event
+        clean = bytearray(telemetry_payload())
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(clean), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        # Frame 2: fault active (offsets 100=4, 102=20, 104=28, 106=24) → fault_observed
+        fault = bytearray(telemetry_payload())
+        fault[100:102] = (4).to_bytes(2, "big")
+        fault[102:104] = (20).to_bytes(2, "big")
+        fault[104:106] = (28).to_bytes(2, "big")
+        fault[106:108] = (24).to_bytes(2, "big")
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(fault), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        fault_events = [fields for event, fields in events if event == "fault_observed"]
+        self.assertEqual(len(fault_events), 1)
+        self.assertEqual(fault_events[0]["code"], "4156,4157")
+        self.assertEqual(fault_events[0]["offsets"], {"100": 4, "102": 20, "104": 28, "106": 24})
+
+        # Frame 3: fault cleared → fault_cleared event
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(clean), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+        cleared_events = [fields for event, fields in events if event == "fault_cleared"]
+        self.assertEqual(len(cleared_events), 1)
+        self.assertEqual(cleared_events[0]["code"], "4156,4157")
 
     async def test_relay_falls_back_to_local_when_upstream_connect_fails(self) -> None:
         import asyncio as _asyncio

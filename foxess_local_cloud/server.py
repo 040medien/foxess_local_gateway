@@ -29,7 +29,7 @@ from .protocol import (
     product_info,
     registration_serial,
 )
-from .telemetry import decode_telemetry, nonzero_u16_words
+from .telemetry import decode_telemetry, fault_code_for, nonzero_u16_words
 
 
 FOXESS_CIPHERS = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
@@ -129,6 +129,9 @@ class Session:
         self.model: str = ""
         self.firmware: str = ""
         self.module: str = ""
+        self.last_fault_code: str = ""
+        self.last_fault_timestamp: str = ""
+        self._previous_fault_active: bool = False
         self.bootstrap = BootstrapResponder()
         self.buffer = bytearray()
         self.upstream_buffer = bytearray()
@@ -301,15 +304,50 @@ class Session:
             await writer.drain()
             self.app.logger.emit("bootstrap_ack", session=self.session_id, serial=self.serial or "", bytes=len(response), hex=response.hex(" "))
         if is_telemetry(frame):
+            self._update_fault_state(frame.payload)
             telemetry = decode_telemetry(
                 frame.payload,
                 self.serial or "",
                 self.model,
                 firmware=self.firmware,
                 module=self.module,
+                last_fault_code=self.last_fault_code,
+                last_fault_timestamp=self.last_fault_timestamp,
             )
             self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
             self.last_telemetry_at = time.time()
+
+    def _update_fault_state(self, payload: bytes) -> None:
+        from .telemetry import u16
+        offsets = (u16(payload, 100), u16(payload, 102), u16(payload, 104), u16(payload, 106))
+        fault_active = any(offsets) or bool(u16(payload, 98))
+        if fault_active and not self._previous_fault_active:
+            code = fault_code_for(offsets)
+            now = time.time()
+            timestamp = _iso8601(now)
+            self.last_fault_code = code
+            self.last_fault_timestamp = timestamp
+            self.app.logger.emit(
+                "fault_observed",
+                session=self.session_id,
+                serial=self.serial or "",
+                code=code,
+                offsets={"100": offsets[0], "102": offsets[1], "104": offsets[2], "106": offsets[3]},
+                at=timestamp,
+            )
+        elif not fault_active and self._previous_fault_active:
+            self.app.logger.emit(
+                "fault_cleared",
+                session=self.session_id,
+                serial=self.serial or "",
+                code=self.last_fault_code,
+                at=_iso8601(time.time()),
+            )
+        self._previous_fault_active = fault_active
+
+
+def _iso8601(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
 def original_destination_ip(writer: asyncio.StreamWriter) -> str | None:
