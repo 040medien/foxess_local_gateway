@@ -18,6 +18,8 @@ class MqttConfig:
     topic_prefix: str = "foxess_m1"
     retain: bool = False
     expire_after_seconds: int | None = 180
+    keepalive_seconds: int = 180
+    reconnect_max_delay_seconds: int = 15
     debug: bool = False
 
 
@@ -86,6 +88,8 @@ def load_config(path: Path | None) -> AppConfig:
             topic_prefix=str(mqtt_raw.get("topic_prefix", "foxess_m1")),
             retain=bool(mqtt_raw.get("retain", False)),
             expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 180)),
+            keepalive_seconds=int(mqtt_raw.get("keepalive_seconds", 180)),
+            reconnect_max_delay_seconds=int(mqtt_raw.get("reconnect_max_delay_seconds", 15)),
             debug=bool(mqtt_raw.get("debug", False)),
         ),
         publish_min_interval_seconds=float(raw.get("publish_min_interval_seconds", 0.0)),

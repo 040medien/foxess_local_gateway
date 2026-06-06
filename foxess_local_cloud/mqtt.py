@@ -42,16 +42,16 @@ class MqttPublisher:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         if hasattr(self.client, "reconnect_delay_set"):
-            self.client.reconnect_delay_set(min_delay=1, max_delay=60)
+            self.client.reconnect_delay_set(min_delay=1, max_delay=self.config.reconnect_max_delay_seconds)
         if self.config.username:
             self.client.username_pw_set(self.config.username, self.config.password)
         if hasattr(self.client, "will_set"):
             self.client.will_set(f"{self.config.topic_prefix}/status", "offline", retain=True)
         try:
             if hasattr(self.client, "connect_async"):
-                self.client.connect_async(self.config.host, self.config.port)
+                self.client.connect_async(self.config.host, self.config.port, keepalive=self.config.keepalive_seconds)
             else:
-                self.client.connect(self.config.host, self.config.port)
+                self.client.connect(self.config.host, self.config.port, keepalive=self.config.keepalive_seconds)
             self.client.loop_start()
             self.emit("mqtt_connecting", host=self.config.host, port=self.config.port)
         except Exception as exc:
