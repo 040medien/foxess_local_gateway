@@ -19,6 +19,49 @@ FAULT_CODE_MAP: dict[tuple[int, int, int, int], str] = {
 }
 
 
+# Map of FoxESS 4-digit fault code → human-readable name.
+# Source: FoxESS Q-Series microinverter user manual V1.0.0, Section 6.1
+# Troubleshooting List. The Q and M families share a fault numbering
+# scheme; codes apply to both.
+FAULT_CODE_NAMES: dict[str, str] = {
+    # PV1 faults
+    "4029": "PV1 Internal Short-Circuit",
+    "4030": "PV1 Low Input Voltage",
+    "4031": "PV1 Over Voltage",
+    "4032": "PV1 Over Current",
+    # PV2 faults
+    "4061": "PV2 Internal Short-Circuit",
+    "4062": "PV2 Low Input Voltage",
+    "4063": "PV2 Over Voltage",
+    "4064": "PV2 Over Current",
+    # PV3 faults
+    "4093": "PV3 Internal Short-Circuit",
+    "4094": "PV3 Low Input Voltage",
+    "4095": "PV3 Over Voltage",
+    "4096": "PV3 Over Current",
+    # PV4 faults
+    "4125": "PV4 Internal Short-Circuit",
+    "4126": "PV4 Low Input Voltage",
+    "4127": "PV4 Over Voltage",
+    "4128": "PV4 Over Current",
+    # AC failures
+    "4147": "Inverter bridge is asymmetrical",
+    "4148": "Voltage at both ends of relay is not equal",
+    "4149": "High or Low Voltage Ride Through",
+    "4150": "Remote Switch",
+    "4151": "Lost AC",
+    "4152": "BUS Over Voltage",
+    "4153": "GFDI",
+    "4154": "AC Under Temperature",
+    "4155": "AC Over Temperature",
+    "4156": "AC Under Frequency",
+    "4157": "AC Over Frequency",
+    "4158": "AC Under Voltage",
+    "4159": "AC Over Voltage",
+    "4160": "AC Over Current",
+}
+
+
 def fault_code_for(offsets: tuple[int, int, int, int]) -> str:
     """Return the FoxCloud 4-digit code(s) for a fault tuple, or raw hex for unknowns."""
     if not any(offsets):
@@ -26,6 +69,17 @@ def fault_code_for(offsets: tuple[int, int, int, int]) -> str:
     if offsets in FAULT_CODE_MAP:
         return FAULT_CODE_MAP[offsets]
     return "raw:" + "-".join(f"{v:02X}" for v in offsets)
+
+
+def fault_code_message_for(code_string: str) -> str:
+    """Translate a code string like "4156,4157" into "AC Under Frequency, AC Over Frequency"."""
+    if not code_string:
+        return ""
+    if code_string.startswith("raw:"):
+        return "Unknown fault (" + code_string + ")"
+    parts = [c.strip() for c in code_string.split(",")]
+    names = [FAULT_CODE_NAMES.get(c, f"Unknown {c}") for c in parts if c]
+    return ", ".join(names)
 
 
 def u16(payload: bytes, offset: int) -> int:
@@ -82,6 +136,7 @@ class Telemetry:
     firmware: str = ""
     module: str = ""
     last_fault_code: str = ""
+    last_fault_message: str = ""
     last_fault_timestamp: str = ""
     pv3_power_w: int | None = None
     pv3_voltage_v: float | None = None
@@ -103,6 +158,7 @@ def decode_telemetry(
     last_fault_code: str = "",
     last_fault_timestamp: str = "",
 ) -> Telemetry:
+    last_fault_message = fault_code_message_for(last_fault_code)
     if len(payload) != 238:
         raise ValueError(f"expected 238-byte payload, got {len(payload)}")
     pv1_power_w = u16(payload, 40)
@@ -139,6 +195,7 @@ def decode_telemetry(
         firmware=firmware,
         module=module,
         last_fault_code=last_fault_code,
+        last_fault_message=last_fault_message,
         last_fault_timestamp=last_fault_timestamp,
         r_power_w=r_power_w,
         export_power_w=export_power_w,
