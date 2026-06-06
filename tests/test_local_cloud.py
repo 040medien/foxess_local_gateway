@@ -320,6 +320,52 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(writer.writes, [])
         self.assertTrue(any(event == "invalid_crc" for event, _fields in events))
 
+    async def test_relay_falls_back_to_local_when_upstream_connect_fails(self) -> None:
+        import asyncio as _asyncio
+
+        app = FoxessLocalCloud(
+            AppConfig(
+                relay=RelayConfig(
+                    enabled=True,
+                    upstreams={"8.209.116.72": ("8.209.116.72", 14431)},
+                    connect_timeout_seconds=0.01,
+                )
+            )
+        )
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+
+        async def _failing_open_connection(*_args: object, **_kwargs: object) -> tuple[object, object]:
+            raise OSError("upstream unreachable")
+
+        class StubReader:
+            def __init__(self, frames: bytes) -> None:
+                self._frames = frames
+                self._sent = False
+
+            async def read(self, _n: int) -> bytes:
+                if self._sent:
+                    return b""
+                self._sent = True
+                return self._frames
+
+        class StubWriter(FakeStreamWriter):
+            def get_extra_info(self, _key: str) -> Any:
+                return None
+
+        original = _asyncio.open_connection
+        try:
+            _asyncio.open_connection = _failing_open_connection  # type: ignore[assignment]
+            session.choose_upstream = lambda _ip: ("8.209.116.72", 14431)  # type: ignore[method-assign]
+            await session.run(StubReader(telemetry_frame()), StubWriter())  # type: ignore[arg-type]
+        finally:
+            _asyncio.open_connection = original  # type: ignore[assignment]
+
+        event_names = [event for event, _fields in events]
+        self.assertIn("relay_connect_failed", event_names)
+        self.assertTrue(any(e == "telemetry" for e, _ in events), "telemetry not decoded after fallback")
+
     async def test_telemetry_log_includes_nonzero_raw_words(self) -> None:
         app = FoxessLocalCloud(AppConfig())
         events: list[tuple[str, dict[str, object]]] = []
