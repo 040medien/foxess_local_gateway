@@ -117,7 +117,7 @@ class MqttPublisher:
         availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
-            if field_name in {"serial", "model", "firmware", "module"}:
+            if field_name in {"serial", "model", "firmware", "module", "fault_active"}:
                 continue
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/{field_name}/config"
             payload: dict[str, Any] = {
@@ -143,6 +143,7 @@ class MqttPublisher:
                 payload["state_class"] = state_class
             self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
         self._publish_running_discovery(telemetry, device, state_topic)
+        self._publish_fault_discovery(telemetry, device, state_topic)
         self._clear_legacy_discovery(telemetry)
         if not self.config.debug:
             self._clear_debug_discovery(telemetry)
@@ -161,6 +162,27 @@ class MqttPublisher:
             "availability": self._availability_block(serial),
             "availability_mode": "all",
             "device_class": "running",
+            "device": device,
+        }
+        if self.config.expire_after_seconds is not None:
+            payload["expire_after"] = self.config.expire_after_seconds
+        self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
+
+    def _publish_fault_discovery(self, telemetry: Telemetry, device: dict[str, Any], state_topic: str) -> None:
+        serial = telemetry.serial
+        config_topic = f"{self.config.discovery_prefix}/binary_sensor/foxess_{serial}/fault/config"
+        payload: dict[str, Any] = {
+            "name": "Fault",
+            "unique_id": f"foxess_{serial}_fault",
+            "object_id": f"foxess_{serial}_fault",
+            "state_topic": state_topic,
+            "value_template": "{{ 'ON' if value_json.fault_active else 'OFF' }}",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "availability": self._availability_block(serial),
+            "availability_mode": "all",
+            "device_class": "problem",
+            "entity_category": "diagnostic",
             "device": device,
         }
         if self.config.expire_after_seconds is not None:
@@ -295,6 +317,7 @@ def friendly_field_name(name: str) -> str:
         "pv4_current_a": "PV4 Current",
         "inverter_temperature_c": "Inverter Temperature",
         "generation_kwh": "Total Generation",
+        "export_total_kwh": "Total Grid Export",
         "operating_state": "Operating State",
         "operating_state_code": "Operating State Code",
         "sequence": "Sequence",
