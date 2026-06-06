@@ -346,6 +346,18 @@ OpenWRT router (policy-based routing plus DNAT) or a managed switch
 with VLAN/policy routing. There is no plug-and-play HA add-on path
 today.
 
+### Could this run on ESP32 / ESPHome instead of a Pi?
+
+In principle yes, but it would be a custom ESPHome component, not a
+YAML-only port. Two awkward parts: an ESP32 can run STA and SoftAP
+simultaneously, but they have to share a single Wi-Fi channel, which
+constrains placement relative to your home Wi-Fi; and acting as a TLS
+server with a custom self-signed cert is not a built-in ESPHome
+feature, so a custom component on top of ESP-IDF's mbedtls would be
+needed. The binary frame decoder is small enough to port to C++, and
+MQTT and HA discovery are easy in ESPHome. Net-net: feasible as an
+ESP32 firmware project, not as a quick port.
+
 ## Development
 
 Run tests:
