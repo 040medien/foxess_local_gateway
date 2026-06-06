@@ -19,7 +19,7 @@ from foxess_local_cloud.protocol import (
     registration_serial,
 )
 from foxess_local_cloud.server import FOXESS_UPSTREAM_CERT_SHA256, FoxessLocalCloud, Session, check_upstream_cert
-from foxess_local_cloud.telemetry import Telemetry, decode_telemetry, fault_code_for, nonzero_u16_words, u32_wordswapped
+from foxess_local_cloud.telemetry import FAULT_CODE_NAMES, Telemetry, decode_telemetry, fault_code_for, fault_code_message_for, nonzero_u16_words, u32_wordswapped
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,6 +249,18 @@ class LocalCloudProtocolTest(unittest.TestCase):
 
     def test_fault_code_for_all_zeros_is_empty(self) -> None:
         self.assertEqual(fault_code_for((0, 0, 0, 0)), "")
+
+    def test_fault_code_message_translates_known_codes(self) -> None:
+        self.assertEqual(fault_code_message_for("4156"), "AC Under Frequency")
+        self.assertEqual(fault_code_message_for("4156,4157"), "AC Under Frequency, AC Over Frequency")
+        self.assertEqual(fault_code_message_for("4029"), "PV1 Internal Short-Circuit")
+        self.assertEqual(fault_code_message_for("raw:04-14-1C-18"), "Unknown fault (raw:04-14-1C-18)")
+        self.assertEqual(fault_code_message_for(""), "")
+
+    def test_fault_code_name_table_covers_known_categories(self) -> None:
+        # Spot-check that all PV and AC fault families are present
+        for code in ("4029", "4061", "4093", "4125", "4152", "4156", "4160"):
+            self.assertIn(code, FAULT_CODE_NAMES, f"missing code {code}")
 
     def test_export_total_decodes_from_offset_74(self) -> None:
         payload = bytearray(telemetry_payload())
