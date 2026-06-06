@@ -1,5 +1,5 @@
 {
-  "host": "0.0.0.0",
+  "host": "${AP_ADDRESS}",
   "port": 14431,
   "cert": "/var/lib/foxess-local-cloud/foxess-local-cloud-cert.pem",
   "key": "/var/lib/foxess-local-cloud/foxess-local-cloud-key.pem",
@@ -8,6 +8,7 @@
   "relay": {
     "enabled": ${RELAY_ENABLED},
     "fallback_to_original_destination": true,
+    "skip_cert_verify": false,
     "upstreams": ${RELAY_UPSTREAMS_JSON}
   },
   "devices": ${DEVICES_JSON},
