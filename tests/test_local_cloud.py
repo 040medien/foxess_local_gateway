@@ -100,6 +100,8 @@ def sample_telemetry(serial: str = TEST_SERIAL, model: str | None = "M1-800-E") 
         pv2_current_a=0.1,
         inverter_temperature_c=25.0,
         generation_kwh=1.0,
+        export_total_kwh=1.0,
+        fault_active=False,
         operating_state="running",
         operating_state_code=4,
         sequence=1,
@@ -236,6 +238,30 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(info["model"], "M1-800-E")
         self.assertEqual(info["family"], "M1")
         self.assertEqual(info["firmware"], "1.80")
+
+    def test_export_total_decodes_from_offset_74(self) -> None:
+        payload = bytearray(telemetry_payload())
+        payload[74:76] = (256).to_bytes(2, "big")
+        payload[76:78] = (0).to_bytes(2, "big")
+        telemetry = decode_telemetry(bytes(payload), TEST_SERIAL, "M1-800-E")
+        self.assertEqual(telemetry.export_total_kwh, round(256 / 128.0, 3))
+
+    def test_fault_active_flips_when_offsets_98_to_106_nonzero(self) -> None:
+        baseline = decode_telemetry(telemetry_payload(), TEST_SERIAL, "M1-800-E")
+        self.assertFalse(baseline.fault_active)
+        payload = bytearray(telemetry_payload())
+        payload[100:102] = (42).to_bytes(2, "big")
+        with_fault = decode_telemetry(bytes(payload), TEST_SERIAL, "M1-800-E")
+        self.assertTrue(with_fault.fault_active)
+
+    def test_supports_four_pv_falls_back_to_offset_156(self) -> None:
+        payload = bytearray(telemetry_payload())
+        # Offset 156 = 4 should enable PV3/PV4 even without "Q1" in the model string
+        payload[156:158] = (4).to_bytes(2, "big")
+        payload[48:60] = bytes.fromhex("1e 00 01 00 00 64 20 00 02 00 00 c8")
+        telemetry = decode_telemetry(bytes(payload), "UNKNOWNMODEL", "Foo-Bar")
+        self.assertIsNotNone(telemetry.pv3_power_w)
+        self.assertEqual(telemetry.pv3_power_w, 100)
 
     def test_q1_telemetry_decodes_pv3_pv4_when_present(self) -> None:
         payload = bytearray(telemetry_payload())
