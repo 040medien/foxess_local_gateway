@@ -18,7 +18,7 @@ from foxess_local_cloud.protocol import (
     product_info,
     registration_serial,
 )
-from foxess_local_cloud.server import FoxessLocalCloud, Session
+from foxess_local_cloud.server import FOXESS_UPSTREAM_CERT_SHA256, FoxessLocalCloud, Session, check_upstream_cert
 from foxess_local_cloud.telemetry import Telemetry, decode_telemetry, nonzero_u16_words, u32_wordswapped
 
 
@@ -239,6 +239,48 @@ class LocalCloudProtocolTest(unittest.TestCase):
         state = telemetry.as_dict()
         self.assertNotIn("pv3_power_w", state)
         self.assertNotIn("pv4_power_w", state)
+
+    def test_check_upstream_cert_accepts_pinned_fingerprint(self) -> None:
+        import hashlib
+
+        der = b"fake-cert-bytes"
+        expected_hex = hashlib.sha256(der).hexdigest()
+
+        class FakeSslObject:
+            def getpeercert(self, binary_form: bool = False) -> bytes:
+                return der
+
+        class FakeWriter:
+            def get_extra_info(self, key: str) -> Any:
+                return FakeSslObject() if key == "ssl_object" else None
+
+        original_pin = FOXESS_UPSTREAM_CERT_SHA256
+        try:
+            import foxess_local_cloud.server as server_module
+
+            server_module.FOXESS_UPSTREAM_CERT_SHA256 = expected_hex
+            self.assertIsNone(check_upstream_cert(FakeWriter()))  # type: ignore[arg-type]
+        finally:
+            import foxess_local_cloud.server as server_module
+
+            server_module.FOXESS_UPSTREAM_CERT_SHA256 = original_pin
+
+    def test_check_upstream_cert_returns_actual_on_mismatch(self) -> None:
+        class FakeSslObject:
+            def getpeercert(self, binary_form: bool = False) -> bytes:
+                return b"some-other-cert"
+
+        class FakeWriter:
+            def get_extra_info(self, key: str) -> Any:
+                return FakeSslObject() if key == "ssl_object" else None
+
+        actual = check_upstream_cert(FakeWriter())  # type: ignore[arg-type]
+        self.assertIsNotNone(actual)
+        self.assertNotEqual(actual, FOXESS_UPSTREAM_CERT_SHA256)
+
+    def test_config_loads_relay_skip_cert_verify(self) -> None:
+        cfg = load_config(ROOT / "local-cloud.example.json")
+        self.assertFalse(cfg.relay.skip_cert_verify)
 
     def test_relay_falls_back_to_public_original_destination(self) -> None:
         app = FoxessLocalCloud(
@@ -533,6 +575,8 @@ class InstallerTest(unittest.TestCase):
             config_path = Path(tmpdir) / "etc/foxess-local-cloud/config.json"
             cfg = load_config(config_path)
             self.assertTrue(cfg.relay.enabled)
+            self.assertFalse(cfg.relay.skip_cert_verify)
+            self.assertEqual(cfg.host, "192.168.51.1")
             self.assertEqual(cfg.mqtt.host, "mqtt.local")
             self.assertIn("8.209.116.72", cfg.relay.upstreams)
             self.assertIn("47.91.86.144", cfg.relay.upstreams)
@@ -546,6 +590,9 @@ class InstallerTest(unittest.TestCase):
             self.assertIn("find_cmd iw /usr/sbin/iw /sbin/iw", ap_helper)
             self.assertIn('phy=$("$IW" dev "$STA_IFACE" info', ap_helper)
             self.assertIn('"$NFT" add rule inet "$NFT_TABLE" prerouting', ap_helper)
+
+            hostapd_conf = (Path(tmpdir) / "etc/hostapd/hostapd-foxess.conf").read_text(encoding="utf-8")
+            self.assertIn("ap_isolate=1", hostapd_conf)
 
             status_script = (Path(tmpdir) / "usr/local/sbin/foxess-gateway-status").read_text(encoding="utf-8")
             self.assertIn('section "Services"', status_script)

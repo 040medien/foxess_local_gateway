@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import json
 import socket
@@ -30,6 +31,12 @@ from .telemetry import decode_telemetry, nonzero_u16_words
 
 
 FOXESS_CIPHERS = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
+# Pinned SHA-256 fingerprint of the FoxESS Cloud TLS cert (self-signed,
+# valid until 2124, identical across the known upstream IPs as of 2026).
+# Used to detect MITM on the upstream relay leg, since the FoxESS PKI is
+# self-signed and standard CA validation cannot apply. If FoxESS rotates,
+# update this constant or set relay.skip_cert_verify=true in config.
+FOXESS_UPSTREAM_CERT_SHA256 = "0ff6d2d0b548f0a03dced31ce7621a8c9497bdc074d723bc152094e4d299c1b7"
 
 
 class JsonLogger:
@@ -158,6 +165,22 @@ class Session:
             ),
             timeout=self.app.config.relay.connect_timeout_seconds,
         )
+        if not self.app.config.relay.skip_cert_verify:
+            mismatch = check_upstream_cert(upstream_writer)
+            if mismatch:
+                self.app.logger.emit(
+                    "relay_cert_mismatch",
+                    session=self.session_id,
+                    upstream_host=upstream_host,
+                    expected=FOXESS_UPSTREAM_CERT_SHA256,
+                    actual=mismatch,
+                )
+                upstream_writer.close()
+                try:
+                    await upstream_writer.wait_closed()
+                except Exception:
+                    pass
+                return
         self.app.logger.emit("relay_connected", session=self.session_id, upstream_host=upstream_host, upstream_port=upstream_port)
         await asyncio.gather(
             self.relay_client_to_upstream(reader, upstream_writer),
@@ -271,6 +294,21 @@ def original_destination_ip(writer: asyncio.StreamWriter) -> str | None:
         return None
     _family, _port, raw_addr = struct.unpack_from("!HH4s", data)
     return socket.inet_ntoa(raw_addr)
+
+
+def check_upstream_cert(writer: asyncio.StreamWriter) -> str | None:
+    """Return the peer cert's SHA-256 if it does not match the pinned FoxESS fingerprint."""
+
+    ssl_object = writer.get_extra_info("ssl_object")
+    if ssl_object is None:
+        return "no_ssl_object"
+    der = ssl_object.getpeercert(binary_form=True)
+    if not der:
+        return "no_peer_cert"
+    actual = hashlib.sha256(der).hexdigest()
+    if actual.lower() == FOXESS_UPSTREAM_CERT_SHA256.lower():
+        return None
+    return actual
 
 
 def is_public_ipv4(value: str) -> bool:

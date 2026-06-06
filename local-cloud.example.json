@@ -8,6 +8,7 @@
   "relay": {
     "enabled": false,
     "fallback_to_original_destination": true,
+    "skip_cert_verify": false,
     "upstreams": {
       "8.209.116.72": "8.209.116.72:14431",
       "47.91.86.144": "47.91.86.144:14431"
