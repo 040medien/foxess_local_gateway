@@ -134,6 +134,9 @@ class Session:
         if self.app.config.relay.enabled:
             await self.run_relay(reader, writer)
             return
+        await self.run_local(reader, writer)
+
+    async def run_local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         while True:
             data = await reader.read(4096)
             if not data:
@@ -147,6 +150,7 @@ class Session:
         upstream = self.choose_upstream(original_ip)
         if not upstream:
             self.app.logger.emit("relay_no_upstream", session=self.session_id, original_ip=original_ip or "")
+            await self.run_local(reader, writer)
             return
         upstream_host, upstream_port = upstream
         self.app.logger.emit(
@@ -156,15 +160,26 @@ class Session:
             upstream_host=upstream_host,
             upstream_port=upstream_port,
         )
-        upstream_reader, upstream_writer = await asyncio.wait_for(
-            asyncio.open_connection(
-                upstream_host,
-                upstream_port,
-                ssl=ssl._create_unverified_context(),
-                server_hostname=original_ip or upstream_host,
-            ),
-            timeout=self.app.config.relay.connect_timeout_seconds,
-        )
+        try:
+            upstream_reader, upstream_writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    upstream_host,
+                    upstream_port,
+                    ssl=ssl._create_unverified_context(),
+                    server_hostname=original_ip or upstream_host,
+                ),
+                timeout=self.app.config.relay.connect_timeout_seconds,
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            self.app.logger.emit(
+                "relay_connect_failed",
+                session=self.session_id,
+                upstream_host=upstream_host,
+                upstream_port=upstream_port,
+                error=str(exc) or type(exc).__name__,
+            )
+            await self.run_local(reader, writer)
+            return
         if not self.app.config.relay.skip_cert_verify:
             mismatch = check_upstream_cert(upstream_writer)
             if mismatch:
@@ -180,6 +195,7 @@ class Session:
                     await upstream_writer.wait_closed()
                 except Exception:
                     pass
+                await self.run_local(reader, writer)
                 return
         self.app.logger.emit("relay_connected", session=self.session_id, upstream_host=upstream_host, upstream_port=upstream_port)
         await asyncio.gather(
