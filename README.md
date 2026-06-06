@@ -293,6 +293,23 @@ Modbus implementations expose. A handful of register offsets in each
 are logged as `raw_u16_*` so they can be investigated as inverters
 accumulate more lifetime energy or hit error states.
 
+### Is the decoded data complete?
+
+The fields that matter for everyday solar monitoring — PV power per
+string, AC power/voltage/current/frequency, inverter temperature,
+operating state, and lifetime energy production — are decoded and
+published as Home Assistant sensors. A handful of 2-byte words in the
+238-byte telemetry frame still do not have confirmed semantics; they
+are logged as `raw_u16_*` events so they can be inspected over time.
+Likely candidates for those unknowns include error codes, daily-yield
+reset markers, and grid-export sub-counters. Pull requests adding
+field mappings backed by observed data are welcome.
+
+Q1 four-string PV (PV3/PV4) decoding is implemented model-aware but
+has not yet been validated on actual Q1 hardware. The same applies to
+the out-of-box commissioning flow for an inverter that has never been
+paired with the FoxESS app.
+
 ### Will I lose access to the FoxESS app?
 
 Only if you want to. With `--relay` enabled (the daemon's relay mode),
