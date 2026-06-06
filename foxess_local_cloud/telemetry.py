@@ -28,7 +28,6 @@ def nonzero_u16_words(payload: bytes) -> dict[str, int]:
 class Telemetry:
     serial: str
     r_power_w: int
-    feedin_power_w: int
     export_power_w: int
     r_voltage_v: float
     r_current_a: float
@@ -96,7 +95,6 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "") -> Telem
         serial=serial,
         model=model,
         r_power_w=r_power_w,
-        feedin_power_w=r_power_w,
         export_power_w=export_power_w,
         r_voltage_v=round(u16(payload, 12) / 32.0, 3),
         r_current_a=round(u16(payload, 14) / 512.0, 3),

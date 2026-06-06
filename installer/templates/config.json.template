@@ -19,7 +19,7 @@
     "discovery_prefix": "homeassistant",
     "topic_prefix": "foxess_m1",
     "retain": false,
-    "expire_after_seconds": 300,
+    "expire_after_seconds": 180,
     "debug": false
   }
 }
