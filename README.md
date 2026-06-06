@@ -293,6 +293,26 @@ Modbus implementations expose. A handful of register offsets in each
 are logged as `raw_u16_*` so they can be investigated as inverters
 accumulate more lifetime energy or hit error states.
 
+### Will I lose access to the FoxESS app?
+
+Only if you want to. With `--relay` enabled (the daemon's relay mode),
+every frame is decoded locally *and* re-encrypted and forwarded to
+FoxESS Cloud, so the FoxESS / Solakon app keeps working exactly as
+before — you just get local MQTT data on top. With `--no-relay`, the
+cloud stops receiving data and the app loses access. You can flip
+between the two by re-running the installer with the corresponding
+flag.
+
+### Why a separate Wi-Fi AP rather than redirecting on my main network?
+
+Scoping. The nftables redirect only matches AP-side traffic, the
+inverter sits on its own SSID with `ap_isolate=1` so it can't reach
+anything else on your LAN, and nothing on your main network ever sees
+the cloud-impersonation cert. If you have an OpenWRT router or a
+managed switch with policy routing, you could in principle achieve the
+same thing on your main network with PBR + DNAT — the Pi setup just
+bundles it all in one cheap device that's easy to reason about.
+
 ### Will it run in Docker or as a Home Assistant add-on?
 
 The service code (`foxess_local_cloud`) is plain Python and will run
