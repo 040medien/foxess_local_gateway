@@ -269,6 +269,40 @@ Disable it for local-only operation:
 sudo ./installer/install_pi_zero_gateway.sh --no-relay
 ```
 
+## FAQ
+
+### Why does this work?
+
+The inverter's communication with FoxESS Cloud is TLS-encrypted, but the
+inverter does not validate the server certificate. That means it accepts
+any cert, including a self-signed one we generate locally. The Pi
+presents its own cert with the same subject as the FoxESS cloud cert
+(`CN=monitor`), terminates the TLS session, decodes the binary
+telemetry, and (in relay mode) re-encrypts and forwards to FoxESS Cloud.
+
+The binary protocol itself was reverse-engineered by capturing the
+cleartext stream and correlating fields with what the FoxESS app and
+Modbus implementations expose. A handful of register offsets in each
+238-byte telemetry frame still don't have confirmed semantics — they
+are logged as `raw_u16_*` so they can be investigated as inverters
+accumulate more lifetime energy or hit error states.
+
+### Will it run in Docker or as a Home Assistant add-on?
+
+The service code (`foxess_local_cloud`) is plain Python and will run
+anywhere Python 3.10+ runs, including a container or HA add-on. The
+catch is the **redirect** layer: the inverter wants to connect to a
+FoxESS cloud IP on TCP/14431, so something on your network has to
+intercept that traffic and route it to the daemon.
+
+This project handles that on a Raspberry Pi by creating an isolated
+Wi-Fi AP for the inverter and using nftables to redirect AP-side
+TCP/14431 to the local daemon. If you run the daemon elsewhere, you
+would have to provide the redirect yourself — for example with an
+OpenWRT router (policy-based routing plus DNAT) or a managed switch
+with VLAN/policy routing. There is no plug-and-play HA add-on path
+today.
+
 ## Development
 
 Run tests:
