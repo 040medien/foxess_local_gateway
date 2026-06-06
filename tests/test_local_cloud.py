@@ -128,8 +128,8 @@ class FakeMqttClient:
     def will_set(self, *args: object, **kwargs: object) -> None:
         self.calls.append(("will_set", args, kwargs))
 
-    def connect_async(self, *args: object) -> None:
-        self.calls.append(("connect_async", args, {}))
+    def connect_async(self, *args: object, **kwargs: object) -> None:
+        self.calls.append(("connect_async", args, kwargs))
         if self.fail_connect:
             raise OSError("broker unavailable")
 
@@ -394,10 +394,10 @@ class MqttPublisherTest(unittest.TestCase):
 
         publisher.connect()
 
-        self.assertIn(("reconnect_delay_set", (), {"min_delay": 1, "max_delay": 60}), client.calls)
+        self.assertIn(("reconnect_delay_set", (), {"min_delay": 1, "max_delay": 15}), client.calls)
         self.assertIn(("username_pw_set", ("user", "pass"), {}), client.calls)
         self.assertIn(("will_set", ("foxess_m1/status", "offline"), {"retain": True}), client.calls)
-        self.assertIn(("connect_async", ("mqtt.local", 1883), {}), client.calls)
+        self.assertIn(("connect_async", ("mqtt.local", 1883), {"keepalive": 180}), client.calls)
         self.assertIn(("loop_start", (), {}), client.calls)
         self.assertEqual(events[0][0], "mqtt_connecting")
 

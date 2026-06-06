@@ -24,6 +24,8 @@
     "topic_prefix": "foxess_m1",
     "retain": false,
     "expire_after_seconds": 180,
+    "keepalive_seconds": 180,
+    "reconnect_max_delay_seconds": 15,
     "debug": false
   }
 }
