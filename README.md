@@ -320,6 +320,21 @@ cloud stops receiving data and the app loses access. You can flip
 between the two by re-running the installer with the corresponding
 flag.
 
+### How do multiple inverters share the AP?
+
+FoxESS microinverters form their own private mesh network — documented
+in the manuals as "WIFI direct connection / Mesh networking
+communication", and visible on the wire here. Only one inverter (the
+**mesh root**) actually associates to the Pi's Wi-Fi AP and holds the
+single DHCP lease. Every other inverter tunnels its telemetry through
+the root over an inverter-to-inverter mesh link, and from the daemon's
+perspective these arrive as multiple TCP sessions from the same source
+IP and MAC, each with its own bootstrap and serial.
+
+The mesh role can shift if the current root loses signal — you may
+briefly see a second AP association during reformation, then it
+settles back to one.
+
 ### Why a separate Wi-Fi AP rather than redirecting on my main network?
 
 Scoping. The nftables redirect only matches AP-side traffic, the
