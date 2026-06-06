@@ -6,6 +6,28 @@ from dataclasses import dataclass, asdict
 from typing import Any
 
 
+# Maps the four fault registers (offset 100, 102, 104, 106) to the
+# user-friendly 4-digit code(s) that FoxCloud reports for the same fault.
+# Each entry was built by correlating the live tuple our daemon captured
+# against the cloud's fault log timestamps for the same inverter.
+#
+# Add new entries here as new fault types are observed.
+FAULT_CODE_MAP: dict[tuple[int, int, int, int], str] = {
+    # Confirmed against FoxCloud on 2026-06-06: AC Under Freq + AC Over Freq
+    # fired simultaneously during a PV string disconnect.
+    (4, 20, 28, 24): "4156,4157",
+}
+
+
+def fault_code_for(offsets: tuple[int, int, int, int]) -> str:
+    """Return the FoxCloud 4-digit code(s) for a fault tuple, or raw hex for unknowns."""
+    if not any(offsets):
+        return ""
+    if offsets in FAULT_CODE_MAP:
+        return FAULT_CODE_MAP[offsets]
+    return "raw:" + "-".join(f"{v:02X}" for v in offsets)
+
+
 def u16(payload: bytes, offset: int) -> int:
     return int.from_bytes(payload[offset : offset + 2], "big")
 
@@ -59,6 +81,8 @@ class Telemetry:
     model: str = ""
     firmware: str = ""
     module: str = ""
+    last_fault_code: str = ""
+    last_fault_timestamp: str = ""
     pv3_power_w: int | None = None
     pv3_voltage_v: float | None = None
     pv3_current_a: float | None = None
@@ -70,7 +94,15 @@ class Telemetry:
         return {key: value for key, value in asdict(self).items() if value is not None and value != ""}
 
 
-def decode_telemetry(payload: bytes, serial: str = "", model: str = "", firmware: str = "", module: str = "") -> Telemetry:
+def decode_telemetry(
+    payload: bytes,
+    serial: str = "",
+    model: str = "",
+    firmware: str = "",
+    module: str = "",
+    last_fault_code: str = "",
+    last_fault_timestamp: str = "",
+) -> Telemetry:
     if len(payload) != 238:
         raise ValueError(f"expected 238-byte payload, got {len(payload)}")
     pv1_power_w = u16(payload, 40)
@@ -106,6 +138,8 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "", firmware
         model=model,
         firmware=firmware,
         module=module,
+        last_fault_code=last_fault_code,
+        last_fault_timestamp=last_fault_timestamp,
         r_power_w=r_power_w,
         export_power_w=export_power_w,
         r_voltage_v=round(u16(payload, 12) / 32.0, 3),
