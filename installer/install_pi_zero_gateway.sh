@@ -534,7 +534,18 @@ fi
 
 if [[ "$DRY_RUN" != 1 && -f "$CONFIG_DIR/config.json" ]]; then
   cp "$CONFIG_DIR/config.json" "$CONFIG_DIR/config.json.bak"
-  chmod 0640 "$CONFIG_DIR/config.json.bak"
+  chmod 0600 "$CONFIG_DIR/config.json.bak"
+fi
+
+# Tighten permissions on any leftover config backups so MQTT credentials
+# inside them are not group-readable. Pattern matches both the current
+# .bak file and historical .before-* names from earlier installer versions.
+if [[ "$DRY_RUN" != 1 ]]; then
+  shopt -s nullglob
+  for bak in "$CONFIG_DIR"/config.json.bak "$CONFIG_DIR"/config.json.before-*; do
+    [[ -f "$bak" ]] && chmod 0600 "$bak" && chown root:root "$bak"
+  done
+  shopt -u nullglob
 fi
 
 render_to "$ROOT_DIR/installer/templates/config.json.template" "${CONFIG_DIR#/}/config.json" 0640

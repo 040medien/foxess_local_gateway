@@ -1,8 +1,8 @@
 [Unit]
 Description=FoxESS inverter Wi-Fi hostapd
 Documentation=file:/opt/foxess-local-cloud/LOCAL_CLOUD_PI.md
-After=foxess-pi-ap.service foxess-local-cloud.service
-Requires=foxess-pi-ap.service foxess-local-cloud.service
+After=foxess-pi-ap.service
+Requires=foxess-pi-ap.service
 PartOf=foxess-pi-ap.service
 
 [Service]

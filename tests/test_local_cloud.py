@@ -557,8 +557,9 @@ class InstallerTest(unittest.TestCase):
             self.assertNotIn("foxess-hostapd.service", local_cloud_unit)
 
             hostapd_unit = (Path(tmpdir) / "etc/systemd/system/foxess-hostapd.service").read_text(encoding="utf-8")
-            self.assertIn("After=foxess-pi-ap.service foxess-local-cloud.service", hostapd_unit)
-            self.assertIn("Requires=foxess-pi-ap.service foxess-local-cloud.service", hostapd_unit)
+            self.assertIn("After=foxess-pi-ap.service\n", hostapd_unit)
+            self.assertIn("Requires=foxess-pi-ap.service\n", hostapd_unit)
+            self.assertNotIn("foxess-local-cloud.service", hostapd_unit)
 
             logrotate = (Path(tmpdir) / "etc/logrotate.d/foxess-local-cloud").read_text(encoding="utf-8")
             self.assertIn("/var/log/foxess-local-cloud/*.jsonl", logrotate)
