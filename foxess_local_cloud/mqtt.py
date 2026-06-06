@@ -11,6 +11,7 @@ from .telemetry import Telemetry
 
 DEBUG_SCALAR_TOPICS = ("0/sequence", "0/status_code")
 OPERATING_STATE_OPTIONS = ("standby", "running", "unknown")
+LEGACY_DISCOVERY_FIELDS = ("feedin_power_w",)
 
 
 class MqttPublisher:
@@ -132,6 +133,7 @@ class MqttPublisher:
                 payload["state_class"] = state_class
             self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
         self._publish_running_discovery(telemetry, device, state_topic)
+        self._clear_legacy_discovery(telemetry)
         if not self.config.debug:
             self._clear_debug_discovery(telemetry)
 
@@ -174,6 +176,11 @@ class MqttPublisher:
         if self.config.debug:
             return state
         return {key: value for key, value in state.items() if not is_debug_field(key)}
+
+    def _clear_legacy_discovery(self, telemetry: Telemetry) -> None:
+        for field_name in LEGACY_DISCOVERY_FIELDS:
+            config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{telemetry.serial}/{field_name}/config"
+            self._publish(config_topic, "", retain=True)
 
     def _clear_debug_discovery(self, telemetry: Telemetry) -> None:
         for field_name in telemetry.as_dict():

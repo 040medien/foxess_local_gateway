@@ -450,7 +450,7 @@ class MqttPublisherTest(unittest.TestCase):
 
         published = {topic: (payload, retain) for topic, payload, retain in client.published}
         state = json.loads(published[f"foxess_m1/{TEST_SERIAL}/state"][0])
-        discovery_payloads = [json.loads(payload) for topic, payload, retain in client.published if topic.endswith("/config")]
+        discovery_payloads = [json.loads(payload) for topic, payload, retain in client.published if topic.endswith("/config") and payload]
         discovery_ids = [payload["unique_id"] for payload in discovery_payloads]
         names_by_id = {payload["unique_id"]: payload["name"] for payload in discovery_payloads}
         self.assertIn("sequence", state)
@@ -460,6 +460,23 @@ class MqttPublisherTest(unittest.TestCase):
         self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/status_code"], ("4", False))
         self.assertIn(f"foxess_{TEST_SERIAL}_raw_u16_002", discovery_ids)
         self.assertEqual(names_by_id[f"foxess_{TEST_SERIAL}_export_power_w"], "Export Power")
+
+    def test_mqtt_publish_clears_legacy_feedin_discovery(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {TEST_SERIAL: "Test Inverter"},
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+
+        publisher.publish(sample_telemetry())
+
+        legacy_topic = f"homeassistant/sensor/foxess_{TEST_SERIAL}/feedin_power_w/config"
+        cleared = [(topic, payload, retain) for topic, payload, retain in client.published if topic == legacy_topic]
+        self.assertEqual(len(cleared), 1)
+        self.assertEqual(cleared[0][1], "")
+        self.assertTrue(cleared[0][2])
 
     def test_mqtt_connect_callback_distinguishes_failed_connack(self) -> None:
         events: list[tuple[str, dict[str, object]]] = []
