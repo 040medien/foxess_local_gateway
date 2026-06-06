@@ -21,9 +21,11 @@ from .protocol import (
     Frame,
     ascii_text,
     extract_frames,
+    is_module_info,
     is_product_info,
     is_registration,
     is_telemetry,
+    module_info,
     product_info,
     registration_serial,
 )
@@ -125,6 +127,8 @@ class Session:
         self.session_id = session_id
         self.serial: str | None = None
         self.model: str = ""
+        self.firmware: str = ""
+        self.module: str = ""
         self.bootstrap = BootstrapResponder()
         self.buffer = bytearray()
         self.upstream_buffer = bytearray()
@@ -284,14 +288,26 @@ class Session:
         if is_product_info(frame):
             info = product_info(frame)
             self.model = info.get("model", "") or self.model
+            self.firmware = info.get("firmware", "") or self.firmware
             self.app.logger.emit("product_info", session=self.session_id, serial=self.serial or "", **info)
+        if is_module_info(frame):
+            module = module_info(frame)
+            if module:
+                self.module = module
+                self.app.logger.emit("module_info", session=self.session_id, serial=self.serial or "", module=module)
         response = self.bootstrap.response_for(frame) if send_bootstrap else None
         if response:
             writer.write(response)
             await writer.drain()
             self.app.logger.emit("bootstrap_ack", session=self.session_id, serial=self.serial or "", bytes=len(response), hex=response.hex(" "))
         if is_telemetry(frame):
-            telemetry = decode_telemetry(frame.payload, self.serial or "", self.model)
+            telemetry = decode_telemetry(
+                frame.payload,
+                self.serial or "",
+                self.model,
+                firmware=self.firmware,
+                module=self.module,
+            )
             self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
             self.last_telemetry_at = time.time()
 

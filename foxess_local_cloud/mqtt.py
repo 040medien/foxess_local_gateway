@@ -102,12 +102,16 @@ class MqttPublisher:
         serial = telemetry.serial
         name = self.device_names.get(serial, serial)
         model = telemetry.model or self.model_by_serial.get(serial) or "FoxESS inverter"
-        device = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model}
+        device: dict[str, Any] = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model}
+        if telemetry.firmware:
+            device["sw_version"] = telemetry.firmware
+        if telemetry.module:
+            device["hw_version"] = telemetry.module
         state_topic = f"{self.config.topic_prefix}/{serial}/state"
         availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
-            if field_name in {"serial", "model"}:
+            if field_name in {"serial", "model", "firmware", "module"}:
                 continue
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/{field_name}/config"
             payload: dict[str, Any] = {

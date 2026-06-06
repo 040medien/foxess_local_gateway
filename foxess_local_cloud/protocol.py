@@ -147,6 +147,18 @@ def is_product_info(frame: Frame) -> bool:
     return frame.start == b"\x7e\x7e" and frame.device == b"\x01\x00\x00\x00" and frame.func == 0 and frame.payload_len >= 32
 
 
+def is_module_info(frame: Frame) -> bool:
+    return frame.start == b"\x7e\x7e" and frame.device == b"\x06\x00\x00\x00" and frame.func == 0 and frame.payload_len == 38
+
+
+def module_info(frame: Frame) -> str:
+    """Extract the ASCII module identifier from the 38-byte heartbeat frame (e.g. "M10200")."""
+    if not is_module_info(frame):
+        return ""
+    text = frame.payload.split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
+    return text
+
+
 def product_info(frame: Frame) -> dict[str, str]:
     if not is_product_info(frame):
         return {}
