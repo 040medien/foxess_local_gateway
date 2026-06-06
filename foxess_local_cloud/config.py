@@ -41,6 +41,7 @@ class RelayConfig:
     upstreams: dict[str, tuple[str, int]] = field(default_factory=dict)
     fallback_to_original_destination: bool = True
     connect_timeout_seconds: float = 10.0
+    skip_cert_verify: bool = False
 
 
 def _load_raw(path: Path) -> dict[str, Any]:
@@ -93,6 +94,7 @@ def load_config(path: Path | None) -> AppConfig:
             upstreams=upstreams,
             fallback_to_original_destination=bool(relay_raw.get("fallback_to_original_destination", True)),
             connect_timeout_seconds=float(relay_raw.get("connect_timeout_seconds", 10.0)),
+            skip_cert_verify=bool(relay_raw.get("skip_cert_verify", False)),
         ),
     )
 
