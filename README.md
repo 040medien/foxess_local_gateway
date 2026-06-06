@@ -269,6 +269,95 @@ Disable it for local-only operation:
 sudo ./installer/install_pi_zero_gateway.sh --no-relay
 ```
 
+## FAQ
+
+### Why does this work?
+
+The inverter's communication with FoxESS Cloud is TLS-encrypted, but the
+inverter does not validate the server certificate. That means it accepts
+any cert, including a self-signed one we generate locally. The Pi
+presents its own cert with the same subject as the FoxESS cloud cert
+(`CN=monitor`), terminates the TLS session, decodes the binary
+telemetry, and (in relay mode) re-encrypts and forwards to FoxESS Cloud.
+
+Interestingly, the *official* FoxESS Cloud cert is itself self-signed —
+same `CN=monitor` subject, valid for 100 years, identical across all
+known FoxESS upstream IPs. There is no PKI for the inverter to validate
+against in the first place. The relay leg pins that cert by SHA-256
+fingerprint to detect substitution on the Pi → cloud path.
+
+The binary protocol itself was reverse-engineered by capturing the
+cleartext stream and correlating fields with what the FoxESS app and
+Modbus implementations expose. A handful of register offsets in each
+238-byte telemetry frame still don't have confirmed semantics — they
+are logged as `raw_u16_*` so they can be investigated as inverters
+accumulate more lifetime energy or hit error states.
+
+### Is the decoded data complete?
+
+The fields that matter for everyday solar monitoring — PV power per
+string, AC power/voltage/current/frequency, inverter temperature,
+operating state, and lifetime energy production — are decoded and
+published as Home Assistant sensors. A handful of 2-byte words in the
+238-byte telemetry frame still do not have confirmed semantics; they
+are logged as `raw_u16_*` events so they can be inspected over time.
+Likely candidates for those unknowns include error codes, daily-yield
+reset markers, and grid-export sub-counters. Pull requests adding
+field mappings backed by observed data are welcome.
+
+Q1 four-string PV (PV3/PV4) decoding is implemented model-aware but
+has not yet been validated on actual Q1 hardware. The same applies to
+the out-of-box commissioning flow for an inverter that has never been
+paired with the FoxESS app.
+
+### Will I lose access to the FoxESS app?
+
+Only if you want to. With `--relay` enabled (the daemon's relay mode),
+every frame is decoded locally *and* re-encrypted and forwarded to
+FoxESS Cloud, so the FoxESS / Solakon app keeps working exactly as
+before — you just get local MQTT data on top. With `--no-relay`, the
+cloud stops receiving data and the app loses access. You can flip
+between the two by re-running the installer with the corresponding
+flag.
+
+### Why a separate Wi-Fi AP rather than redirecting on my main network?
+
+Scoping. The nftables redirect only matches AP-side traffic, the
+inverter sits on its own SSID with `ap_isolate=1` so it can't reach
+anything else on your LAN, and nothing on your main network ever sees
+the cloud-impersonation cert. If you have an OpenWRT router or a
+managed switch with policy routing, you could in principle achieve the
+same thing on your main network with PBR + DNAT — the Pi setup just
+bundles it all in one cheap device that's easy to reason about.
+
+### Will it run in Docker or as a Home Assistant add-on?
+
+The service code (`foxess_local_cloud`) is plain Python and will run
+anywhere Python 3.10+ runs, including a container or HA add-on. The
+catch is the **redirect** layer: the inverter wants to connect to a
+FoxESS cloud IP on TCP/14431, so something on your network has to
+intercept that traffic and route it to the daemon.
+
+This project handles that on a Raspberry Pi by creating an isolated
+Wi-Fi AP for the inverter and using nftables to redirect AP-side
+TCP/14431 to the local daemon. If you run the daemon elsewhere, you
+would have to provide the redirect yourself — for example with an
+OpenWRT router (policy-based routing plus DNAT) or a managed switch
+with VLAN/policy routing. There is no plug-and-play HA add-on path
+today.
+
+### Could this run on ESP32 / ESPHome instead of a Pi?
+
+In principle yes, but it would be a custom ESPHome component, not a
+YAML-only port. Two awkward parts: an ESP32 can run STA and SoftAP
+simultaneously, but they have to share a single Wi-Fi channel, which
+constrains placement relative to your home Wi-Fi; and acting as a TLS
+server with a custom self-signed cert is not a built-in ESPHome
+feature, so a custom component on top of ESP-IDF's mbedtls would be
+needed. The binary frame decoder is small enough to port to C++, and
+MQTT and HA discovery are easy in ESPHome. Net-net: feasible as an
+ESP32 firmware project, not as a quick port.
+
 ## Development
 
 Run tests:
