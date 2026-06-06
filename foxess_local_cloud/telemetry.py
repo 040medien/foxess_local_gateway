@@ -41,6 +41,8 @@ class Telemetry:
     pv2_current_a: float
     inverter_temperature_c: float
     generation_kwh: float
+    export_total_kwh: float
+    fault_active: bool
     operating_state: str
     operating_state_code: int
     sequence: int
@@ -79,20 +81,26 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "", firmware
     pv4_voltage_v = round(u16(payload, 54) / 256.0, 3)
     pv4_current_a = round(u16(payload, 56) / 512.0, 3)
     pv4_power_w = u16(payload, 58)
-    include_pv34 = supports_four_pv(model) or any(
-        value
-        for value in (
-            pv3_power_w,
-            pv3_voltage_v,
-            pv3_current_a,
-            pv4_power_w,
-            pv4_voltage_v,
-            pv4_current_a,
+    string_count = u16(payload, 156)
+    include_pv34 = (
+        supports_four_pv(model)
+        or string_count >= 4
+        or any(
+            value
+            for value in (
+                pv3_power_w,
+                pv3_voltage_v,
+                pv3_current_a,
+                pv4_power_w,
+                pv4_voltage_v,
+                pv4_current_a,
+            )
         )
     )
     r_power_w = s16(payload, 6)
     export_power_w = -s16(payload, 2)
     operating_state_code = u16(payload, 154)
+    fault_active = any(u16(payload, off) for off in (98, 100, 102, 104, 106))
     return Telemetry(
         serial=serial,
         model=model,
@@ -118,6 +126,8 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "", firmware
         pv4_current_a=pv4_current_a if include_pv34 else None,
         inverter_temperature_c=round(u16(payload, 62) / 32.0, 2),
         generation_kwh=round(u32_wordswapped(payload, 70) / 128.0, 3),
+        export_total_kwh=round(u32_wordswapped(payload, 74) / 128.0, 3),
+        fault_active=fault_active,
         operating_state=operating_state(operating_state_code),
         operating_state_code=operating_state_code,
         sequence=u16(payload, 66),
