@@ -29,6 +29,7 @@ class MqttPublisher:
         self.client: Any = None
         self.announced: set[str] = set()
         self.model_by_serial: dict[str, str] = {}
+        self.device_signature_by_serial: dict[str, tuple[str, str, str]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -84,11 +85,16 @@ class MqttPublisher:
         if not self.enabled or self.client is None or not telemetry.serial:
             return
         known_model = self.model_by_serial.get(telemetry.serial)
+        signature = (telemetry.model or "", telemetry.firmware or "", telemetry.module or "")
+        known_signature = self.device_signature_by_serial.get(telemetry.serial)
         should_announce = telemetry.serial not in self.announced
         if telemetry.model and telemetry.model != known_model:
             should_announce = True
+        if known_signature is not None and signature != known_signature:
+            should_announce = True
         if telemetry.model:
             self.model_by_serial[telemetry.serial] = telemetry.model
+        self.device_signature_by_serial[telemetry.serial] = signature
         if should_announce:
             self._publish_discovery(telemetry)
             self.announced.add(telemetry.serial)
@@ -102,12 +108,16 @@ class MqttPublisher:
         serial = telemetry.serial
         name = self.device_names.get(serial, serial)
         model = telemetry.model or self.model_by_serial.get(serial) or "FoxESS inverter"
-        device = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model}
+        device: dict[str, Any] = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model}
+        if telemetry.firmware:
+            device["sw_version"] = telemetry.firmware
+        if telemetry.module:
+            device["hw_version"] = telemetry.module
         state_topic = f"{self.config.topic_prefix}/{serial}/state"
         availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
-            if field_name in {"serial", "model"}:
+            if field_name in {"serial", "model", "firmware", "module"}:
                 continue
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/{field_name}/config"
             payload: dict[str, Any] = {

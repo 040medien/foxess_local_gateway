@@ -55,6 +55,8 @@ class Telemetry:
     raw_u16_154: int
     raw_u16_156: int
     model: str = ""
+    firmware: str = ""
+    module: str = ""
     pv3_power_w: int | None = None
     pv3_voltage_v: float | None = None
     pv3_current_a: float | None = None
@@ -66,7 +68,7 @@ class Telemetry:
         return {key: value for key, value in asdict(self).items() if value is not None and value != ""}
 
 
-def decode_telemetry(payload: bytes, serial: str = "", model: str = "") -> Telemetry:
+def decode_telemetry(payload: bytes, serial: str = "", model: str = "", firmware: str = "", module: str = "") -> Telemetry:
     if len(payload) != 238:
         raise ValueError(f"expected 238-byte payload, got {len(payload)}")
     pv1_power_w = u16(payload, 40)
@@ -94,6 +96,8 @@ def decode_telemetry(payload: bytes, serial: str = "", model: str = "") -> Telem
     return Telemetry(
         serial=serial,
         model=model,
+        firmware=firmware,
+        module=module,
         r_power_w=r_power_w,
         export_power_w=export_power_w,
         r_voltage_v=round(u16(payload, 12) / 32.0, 3),
