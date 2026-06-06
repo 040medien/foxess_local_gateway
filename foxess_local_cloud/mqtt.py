@@ -93,7 +93,7 @@ class MqttPublisher:
             self.announced.add(telemetry.serial)
         state_topic = f"{self.config.topic_prefix}/{telemetry.serial}/state"
         self._publish(state_topic, json.dumps(self._state_dict(telemetry), separators=(",", ":")), retain=self.config.retain)
-        self._publish(f"{self.config.topic_prefix}/{telemetry.serial}/availability", "online", retain=False)
+        self._publish(f"{self.config.topic_prefix}/{telemetry.serial}/availability", "online", retain=True)
         self._publish_scalar_topics(telemetry)
 
     def _publish_discovery(self, telemetry: Telemetry) -> None:
@@ -103,6 +103,7 @@ class MqttPublisher:
         model = telemetry.model or self.model_by_serial.get(serial) or "FoxESS inverter"
         device = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model}
         state_topic = f"{self.config.topic_prefix}/{serial}/state"
+        availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
             if field_name in {"serial", "model"}:
@@ -114,9 +115,8 @@ class MqttPublisher:
                 "object_id": f"foxess_{serial}_{field_name}",
                 "state_topic": state_topic,
                 "value_template": "{{ value_json." + field_name + " }}",
-                "availability_topic": f"{self.config.topic_prefix}/{serial}/availability",
-                "payload_available": "online",
-                "payload_not_available": "offline",
+                "availability": availability,
+                "availability_mode": "all",
                 "device": device,
             }
             if self.config.expire_after_seconds is not None:
@@ -146,15 +146,28 @@ class MqttPublisher:
             "value_template": "{{ 'ON' if value_json.operating_state == 'running' else 'OFF' }}",
             "payload_on": "ON",
             "payload_off": "OFF",
-            "availability_topic": f"{self.config.topic_prefix}/{serial}/availability",
-            "payload_available": "online",
-            "payload_not_available": "offline",
+            "availability": self._availability_block(serial),
+            "availability_mode": "all",
             "device_class": "running",
             "device": device,
         }
         if self.config.expire_after_seconds is not None:
             payload["expire_after"] = self.config.expire_after_seconds
         self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
+
+    def _availability_block(self, serial: str) -> list[dict[str, str]]:
+        return [
+            {
+                "topic": f"{self.config.topic_prefix}/status",
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            },
+            {
+                "topic": f"{self.config.topic_prefix}/{serial}/availability",
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            },
+        ]
 
     def _state_dict(self, telemetry: Telemetry) -> dict[str, Any]:
         state = telemetry.as_dict()
@@ -246,7 +259,6 @@ def is_debug_field(name: str) -> bool:
 def friendly_field_name(name: str) -> str:
     explicit = {
         "r_power_w": "AC Power",
-        "feedin_power_w": "Feed-in Power",
         "export_power_w": "Export Power",
         "r_voltage_v": "AC Voltage",
         "r_current_a": "AC Current",

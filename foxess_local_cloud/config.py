@@ -17,7 +17,7 @@ class MqttConfig:
     discovery_prefix: str = "homeassistant"
     topic_prefix: str = "foxess_m1"
     retain: bool = False
-    expire_after_seconds: int | None = 300
+    expire_after_seconds: int | None = 180
     debug: bool = False
 
 
@@ -84,7 +84,7 @@ def load_config(path: Path | None) -> AppConfig:
             discovery_prefix=str(mqtt_raw.get("discovery_prefix", "homeassistant")),
             topic_prefix=str(mqtt_raw.get("topic_prefix", "foxess_m1")),
             retain=bool(mqtt_raw.get("retain", False)),
-            expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 300)),
+            expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 180)),
             debug=bool(mqtt_raw.get("debug", False)),
         ),
         publish_min_interval_seconds=float(raw.get("publish_min_interval_seconds", 0.0)),
