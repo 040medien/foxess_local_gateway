@@ -117,7 +117,7 @@ class MqttPublisher:
         availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
-            if field_name in {"serial", "model", "firmware", "module", "fault_active"}:
+            if field_name in {"serial", "model", "firmware", "module", "fault_active", "last_fault_code", "last_fault_timestamp"}:
                 continue
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/{field_name}/config"
             payload: dict[str, Any] = {
@@ -144,6 +144,7 @@ class MqttPublisher:
             self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
         self._publish_running_discovery(telemetry, device, state_topic)
         self._publish_fault_discovery(telemetry, device, state_topic)
+        self._publish_last_fault_discovery(telemetry, device, state_topic)
         self._clear_legacy_discovery(telemetry)
         if not self.config.debug:
             self._clear_debug_discovery(telemetry)
@@ -188,6 +189,37 @@ class MqttPublisher:
         if self.config.expire_after_seconds is not None:
             payload["expire_after"] = self.config.expire_after_seconds
         self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
+
+    def _publish_last_fault_discovery(self, telemetry: Telemetry, device: dict[str, Any], state_topic: str) -> None:
+        serial = telemetry.serial
+        availability = self._availability_block(serial)
+        common = {
+            "state_topic": state_topic,
+            "availability": availability,
+            "availability_mode": "all",
+            "entity_category": "diagnostic",
+            "device": device,
+        }
+        code_config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/last_fault_code/config"
+        code_payload: dict[str, Any] = {
+            "name": "Last Fault Code",
+            "unique_id": f"foxess_{serial}_last_fault_code",
+            "object_id": f"foxess_{serial}_last_fault_code",
+            "value_template": "{{ value_json.last_fault_code }}",
+            **common,
+        }
+        self._publish(code_config_topic, json.dumps(code_payload, separators=(",", ":")), retain=True)
+
+        ts_config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/last_fault_timestamp/config"
+        ts_payload: dict[str, Any] = {
+            "name": "Last Fault Time",
+            "unique_id": f"foxess_{serial}_last_fault_timestamp",
+            "object_id": f"foxess_{serial}_last_fault_timestamp",
+            "value_template": "{{ value_json.last_fault_timestamp }}",
+            "device_class": "timestamp",
+            **common,
+        }
+        self._publish(ts_config_topic, json.dumps(ts_payload, separators=(",", ":")), retain=True)
 
     def _availability_block(self, serial: str) -> list[dict[str, str]]:
         return [
