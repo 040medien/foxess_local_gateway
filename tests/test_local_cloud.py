@@ -42,6 +42,12 @@ def product_info_frame(model: str = "M1-800-E") -> bytes:
     return make_frame(b"\x7e\x7e", b"\x01\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")
 
 
+def module_info_frame(module_id: str = "M10200") -> bytes:
+    payload = bytearray(38)
+    payload[0 : len(module_id)] = module_id.encode("ascii")
+    return make_frame(b"\x7e\x7e", b"\x06\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")
+
+
 def telemetry_payload() -> bytes:
     payload = bytearray(238)
 
@@ -217,6 +223,12 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(words["002"], 65413)
         self.assertEqual(words["154"], 4)
         self.assertNotIn("004", words)
+
+    def test_module_info_frame_extracts_module_id(self) -> None:
+        from foxess_local_cloud.protocol import is_module_info, module_info
+        frame = extract_frames(bytearray(module_info_frame()))[0]
+        self.assertTrue(is_module_info(frame))
+        self.assertEqual(module_info(frame), "M10200")
 
     def test_product_info_frame_extracts_model(self) -> None:
         frame = extract_frames(bytearray(product_info_frame()))[0]
@@ -430,6 +442,29 @@ class MqttPublisherTest(unittest.TestCase):
 
         self.assertGreater(len(client.published), 1)
         self.assertTrue(any(event == "mqtt_publish_error" for event, _fields in events))
+
+    def test_mqtt_discovery_includes_sw_and_hw_version_on_device(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {TEST_SERIAL: "Test Inverter"},
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+
+        from dataclasses import replace
+        tele = replace(sample_telemetry(), firmware="1.80", module="M10200")
+        publisher.publish(tele)
+
+        configs = [json.loads(p) for t, p, r in client.published if t.endswith("/config") and p]
+        self.assertTrue(configs)
+        # All sensor discovery payloads carry the same device dict; check any of them
+        device = configs[0]["device"]
+        self.assertEqual(device["sw_version"], "1.80")
+        self.assertEqual(device["hw_version"], "M10200")
+        # firmware/module shouldn't appear as their own sensors
+        unique_ids = {c["unique_id"] for c in configs}
+        self.assertFalse(any(uid.endswith("_firmware") or uid.endswith("_module") for uid in unique_ids))
 
     def test_mqtt_discovery_uses_detected_model_and_dynamic_fields(self) -> None:
         client = FakeMqttClient()
