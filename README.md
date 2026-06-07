@@ -1,16 +1,9 @@
 # FoxESS M1 Local Gateway
 
-Local MQTT/Home Assistant gateway for FoxESS M1 (and potentially Q1) microinverters, designed to run
-on a Raspberry Pi (tested with a Zero W) running Raspberry Pi OS Lite (Debian Trixie).
-
-The gateway creates a small inverter-only Wi-Fi network, accepts the inverter's
-local connection (TCP/14431), decodes pushed telemetry, and publishes it to MQTT
-with Home Assistant discovery while being connected to your regular wifi as a
-client. No FoxESS Cloud API key is needed.
-
-Inverter setup runs locally too: the Pi can provision new and existing
-inverters directly over Bluetooth, so the FoxESS app and cloud are not
-needed at any point.
+A Raspberry Pi gateway for FoxESS M1 microinverters. Provisions inverters
+directly over Bluetooth, decodes their local telemetry, and publishes it
+to MQTT with Home Assistant auto-discovery — the FoxESS app and cloud are
+not needed at any point.
 
 ![FoxESS local gateway architecture](docs/images/illustration.png)
 
