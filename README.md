@@ -31,17 +31,6 @@ The Raspberry Pi runs three pieces:
 - `foxess-local-cloud`, a Python daemon that decodes telemetry and publishes
   MQTT state.
 
-Default topology:
-
-```text
-Home LAN / MQTT broker
-        ^
-        | wlan0
-Raspberry Pi Zero W
-        | ap0: FoxESS-Local
-        v
-FoxESS inverter Wi-Fi
-```
 ## Screenshots
 
 ![MQTT auto discovered entities in Home Assistant](docs/images/screenshot_entities.png)
