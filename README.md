@@ -24,24 +24,15 @@ the FoxESS app and cloud are not needed at any point.
 
 ## What This Does
 
-The Raspberry Pi runs three pieces:
+The Raspberry Pi runs four pieces:
 
 - `hostapd`/`dnsmasq` for an inverter-only Wi-Fi AP.
 - A narrow nftables redirect for TCP/14431 traffic from the inverter AP subnet.
 - `foxess-local-cloud`, a Python daemon that decodes telemetry and publishes
   MQTT state.
+- `foxess-ble-provision`, a Bluetooth tool that points inverters at the AP
+  during setup, so the FoxESS mobile app isn't needed.
 
-Default topology:
-
-```text
-Home LAN / MQTT broker
-        ^
-        | wlan0
-Raspberry Pi Zero W
-        | ap0: FoxESS-Local
-        v
-FoxESS inverter Wi-Fi
-```
 ## Screenshots
 
 ![MQTT auto discovered entities in Home Assistant](docs/images/screenshot_entities.png)
