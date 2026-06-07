@@ -171,6 +171,44 @@ def product_info(frame: Frame) -> dict[str, str]:
     return {"module": module, "family": family, "model": model, "firmware": firmware}
 
 
+def is_mesh_root_frame(frame: Frame) -> bool:
+    """A 7f7f frame in which the inverter declares it is the mesh root, i.e.
+    directly associated to the Pi's AP.
+
+    Payload layout: ``01 05 01 01 00 06 <ap_mac:6> 03 <beacon_mfg:5> 04 00 00 00 ee``.
+    """
+    return (
+        frame.start == b"\x7f\x7f"
+        and len(frame.payload) >= 12
+        and frame.payload[:4] == b"\x01\x05\x01\x01"
+    )
+
+
+def is_mesh_follower_frame(frame: Frame) -> bool:
+    """A 7f7f frame in which the inverter declares it is a mesh follower,
+    tunnelling its TCP session through another inverter (the root).
+
+    Payload layout: ``01 05 01 02 <serial_len:1> <root_serial:serial_len> ...``.
+    """
+    if frame.start != b"\x7f\x7f" or len(frame.payload) < 5:
+        return False
+    if frame.payload[:4] != b"\x01\x05\x01\x02":
+        return False
+    serial_len = frame.payload[4]
+    return 1 <= serial_len <= 32 and len(frame.payload) >= 5 + serial_len
+
+
+def mesh_peer_serial(frame: Frame) -> str:
+    """Return the root inverter's serial declared in a mesh-follower frame, or '' if not one."""
+    if not is_mesh_follower_frame(frame):
+        return ""
+    serial_len = frame.payload[4]
+    try:
+        return frame.payload[5 : 5 + serial_len].decode("ascii")
+    except UnicodeDecodeError:
+        return ""
+
+
 class BootstrapResponder:
     """Minimal local FoxESS cloud bootstrap ACK state machine."""
 

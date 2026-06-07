@@ -117,7 +117,7 @@ class MqttPublisher:
         availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
         for field_name in state:
-            if field_name in {"serial", "model", "firmware", "module", "fault_active", "last_fault_code", "last_fault_message", "last_fault_timestamp"}:
+            if field_name in {"serial", "model", "firmware", "module", "fault_active", "last_fault_code", "last_fault_message", "last_fault_timestamp", "mesh_role", "mesh_peer_serial"}:
                 continue
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/{field_name}/config"
             payload: dict[str, Any] = {
@@ -145,6 +145,7 @@ class MqttPublisher:
         self._publish_running_discovery(telemetry, device, state_topic)
         self._publish_fault_discovery(telemetry, device, state_topic)
         self._publish_last_fault_discovery(telemetry, device, state_topic)
+        self._publish_mesh_discovery(telemetry, device, state_topic)
         self._clear_legacy_discovery(telemetry)
         if not self.config.debug:
             self._clear_debug_discovery(telemetry)
@@ -230,6 +231,36 @@ class MqttPublisher:
             **common,
         }
         self._publish(ts_config_topic, json.dumps(ts_payload, separators=(",", ":")), retain=True)
+
+    def _publish_mesh_discovery(self, telemetry: Telemetry, device: dict[str, Any], state_topic: str) -> None:
+        serial = telemetry.serial
+        availability = self._availability_block(serial)
+        common = {
+            "state_topic": state_topic,
+            "availability": availability,
+            "availability_mode": "all",
+            "entity_category": "diagnostic",
+            "device": device,
+        }
+        role_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/mesh_role/config"
+        role_payload: dict[str, Any] = {
+            "name": "Mesh Role",
+            "unique_id": f"foxess_{serial}_mesh_role",
+            "object_id": f"foxess_{serial}_mesh_role",
+            "value_template": "{{ value_json.mesh_role | default('') }}",
+            **common,
+        }
+        self._publish(role_topic, json.dumps(role_payload, separators=(",", ":")), retain=True)
+
+        peer_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/mesh_peer_serial/config"
+        peer_payload: dict[str, Any] = {
+            "name": "Mesh Peer Serial",
+            "unique_id": f"foxess_{serial}_mesh_peer_serial",
+            "object_id": f"foxess_{serial}_mesh_peer_serial",
+            "value_template": "{{ value_json.mesh_peer_serial | default('') }}",
+            **common,
+        }
+        self._publish(peer_topic, json.dumps(peer_payload, separators=(",", ":")), retain=True)
 
     def _availability_block(self, serial: str) -> list[dict[str, str]]:
         return [
