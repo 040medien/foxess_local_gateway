@@ -138,6 +138,8 @@ class Telemetry:
     last_fault_code: str = ""
     last_fault_message: str = ""
     last_fault_timestamp: str = ""
+    mesh_role: str = ""
+    mesh_peer_serial: str = ""
     pv3_power_w: int | None = None
     pv3_voltage_v: float | None = None
     pv3_current_a: float | None = None
@@ -157,6 +159,8 @@ def decode_telemetry(
     module: str = "",
     last_fault_code: str = "",
     last_fault_timestamp: str = "",
+    mesh_role: str = "",
+    mesh_peer_serial: str = "",
 ) -> Telemetry:
     last_fault_message = fault_code_message_for(last_fault_code)
     if len(payload) != 238:
@@ -197,6 +201,8 @@ def decode_telemetry(
         last_fault_code=last_fault_code,
         last_fault_message=last_fault_message,
         last_fault_timestamp=last_fault_timestamp,
+        mesh_role=mesh_role,
+        mesh_peer_serial=mesh_peer_serial,
         r_power_w=r_power_w,
         export_power_w=export_power_w,
         r_voltage_v=round(u16(payload, 12) / 32.0, 3),

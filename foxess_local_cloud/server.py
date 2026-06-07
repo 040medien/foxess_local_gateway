@@ -21,10 +21,13 @@ from .protocol import (
     Frame,
     ascii_text,
     extract_frames,
+    is_mesh_follower_frame,
+    is_mesh_root_frame,
     is_module_info,
     is_product_info,
     is_registration,
     is_telemetry,
+    mesh_peer_serial,
     module_info,
     product_info,
     registration_serial,
@@ -131,6 +134,8 @@ class Session:
         self.module: str = ""
         self.last_fault_code: str = ""
         self.last_fault_timestamp: str = ""
+        self.mesh_role: str = ""
+        self.mesh_peer_serial: str = ""
         self._previous_fault_active: bool = False
         self.bootstrap = BootstrapResponder()
         self.buffer = bytearray()
@@ -298,6 +303,17 @@ class Session:
             if module:
                 self.module = module
                 self.app.logger.emit("module_info", session=self.session_id, serial=self.serial or "", module=module)
+        if is_mesh_root_frame(frame):
+            if self.mesh_role != "root" or self.mesh_peer_serial:
+                self.mesh_role = "root"
+                self.mesh_peer_serial = ""
+                self.app.logger.emit("mesh_role", session=self.session_id, serial=self.serial or "", role="root")
+        elif is_mesh_follower_frame(frame):
+            peer = mesh_peer_serial(frame)
+            if self.mesh_role != "follower" or self.mesh_peer_serial != peer:
+                self.mesh_role = "follower"
+                self.mesh_peer_serial = peer
+                self.app.logger.emit("mesh_role", session=self.session_id, serial=self.serial or "", role="follower", peer_serial=peer)
         response = self.bootstrap.response_for(frame) if send_bootstrap else None
         if response:
             writer.write(response)
@@ -313,6 +329,8 @@ class Session:
                 module=self.module,
                 last_fault_code=self.last_fault_code,
                 last_fault_timestamp=self.last_fault_timestamp,
+                mesh_role=self.mesh_role,
+                mesh_peer_serial=self.mesh_peer_serial,
             )
             self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
             self.last_telemetry_at = time.time()

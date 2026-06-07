@@ -247,6 +247,62 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertTrue(result.startswith("raw:"))
         self.assertIn("21", result)  # 33 = 0x21
 
+    def test_mesh_root_frame_detected(self) -> None:
+        from foxess_local_cloud.protocol import is_mesh_root_frame
+        # Payload mirrors the captured root frame: declares the AP MAC + beacon mfg sig.
+        payload = bytes.fromhex("01 05 01 01 00 06 ba 27 eb 5d 8a a1 03 f3 ba 40 01 00 04 00 00 00 ee".replace(" ", ""))
+        raw = make_frame(b"\x7f\x7f", b"\x3f\x6a\x25\x8e", 0xC9, payload, b"\xf7\xf7")
+        frame = extract_frames(bytearray(raw))[0]
+        self.assertTrue(is_mesh_root_frame(frame))
+
+    def test_mesh_follower_frame_yields_peer_serial(self) -> None:
+        from foxess_local_cloud.protocol import is_mesh_follower_frame, mesh_peer_serial
+        peer = b"60TESTSERIAL000"
+        payload = b"\x01\x05\x01\x02" + bytes([len(peer)]) + peer + bytes.fromhex("00000100040000031e")
+        raw = make_frame(b"\x7f\x7f", b"\x3f\x6a\x25\x8e", 0xE2, payload, b"\xf7\xf7")
+        frame = extract_frames(bytearray(raw))[0]
+        self.assertTrue(is_mesh_follower_frame(frame))
+        self.assertEqual(mesh_peer_serial(frame), "60TESTSERIAL000")
+
+    def test_mesh_frame_rejects_7e7e_family(self) -> None:
+        from foxess_local_cloud.protocol import is_mesh_follower_frame, is_mesh_root_frame
+        # Same prefix bytes but wrong frame family -- must not match.
+        payload = b"\x01\x05\x01\x01\x00\x06\x00\x00\x00\x00\x00\x00"
+        raw = make_frame(b"\x7e\x7e", b"\x00\x00\x00\x00", 0x00, payload, b"\xe7\xe7")
+        frame = extract_frames(bytearray(raw))[0]
+        self.assertFalse(is_mesh_root_frame(frame))
+        self.assertFalse(is_mesh_follower_frame(frame))
+
+    def test_mesh_follower_rejects_truncated_serial(self) -> None:
+        from foxess_local_cloud.protocol import is_mesh_follower_frame, mesh_peer_serial
+        # Declares serial_len=15 but only provides 5 bytes -- must be rejected.
+        payload = b"\x01\x05\x01\x02\x0f" + b"60M28"
+        raw = make_frame(b"\x7f\x7f", b"\x00\x00\x00\x00", 0xE2, payload, b"\xf7\xf7")
+        frame = extract_frames(bytearray(raw))[0]
+        self.assertFalse(is_mesh_follower_frame(frame))
+        self.assertEqual(mesh_peer_serial(frame), "")
+
+    def test_decode_telemetry_passes_mesh_state_through(self) -> None:
+        payload = telemetry_payload()
+        result = decode_telemetry(
+            payload,
+            serial=TEST_SERIAL,
+            mesh_role="follower",
+            mesh_peer_serial="60TESTSERIAL000",
+        )
+        self.assertEqual(result.mesh_role, "follower")
+        self.assertEqual(result.mesh_peer_serial, "60TESTSERIAL000")
+        state = result.as_dict()
+        self.assertEqual(state["mesh_role"], "follower")
+        self.assertEqual(state["mesh_peer_serial"], "60TESTSERIAL000")
+
+    def test_decode_telemetry_omits_empty_mesh_state(self) -> None:
+        result = decode_telemetry(telemetry_payload(), serial=TEST_SERIAL)
+        state = result.as_dict()
+        # Empty strings are dropped by as_dict(), so unobserved-yet mesh state stays out.
+        self.assertNotIn("mesh_role", state)
+        self.assertNotIn("mesh_peer_serial", state)
+
     def test_fault_code_for_all_zeros_is_empty(self) -> None:
         self.assertEqual(fault_code_for((0, 0, 0, 0)), "")
 
