@@ -152,6 +152,7 @@ listen
 connect
 registration
 bootstrap_ack
+module_info
 product_info
 telemetry
 mqtt_connected

@@ -372,17 +372,18 @@ today.
 
 ### Could this run on ESP32 / ESPHome instead of a Pi?
 
-In principle yes, but it would be a custom ESPHome component, not a
-YAML-only port. The awkward part is acting as a TLS server with a
-custom self-signed cert: that is not a built-in ESPHome feature, so
-a custom component on top of ESP-IDF's mbedtls would be needed. The
-binary frame decoder is small enough to port to C++, and MQTT and
-HA discovery are easy in ESPHome. (The "STA and SoftAP must share a
-channel" constraint that some writeups call out as an ESP32 downside
-applies on the Pi Zero W too — its single BCM43438 radio also forces
-`ap0` to follow whatever channel `wlan0` is on — so it's a wash, not
-an ESP32-specific disadvantage.) Net-net: feasible as an ESP32
-firmware project, not as a quick port.
+In principle yes, but it would need a custom ESPHome component
+rather than a YAML-only port. The real obstacle is that the gateway
+has to act as a TLS server with its own self-signed cert, which
+isn't something ESPHome can do out of the box. The binary frame
+decoder is small enough to port to C++, and MQTT and Home Assistant
+discovery are easy in ESPHome.
+
+One thing worth noting: on an ESP32 the Wi-Fi client and the
+inverter access point have to use the same channel. That sounds
+like a downside, but the Pi Zero W has only one radio too, so its
+access point also has to sit on whatever channel your home Wi-Fi
+is using. Both options share that constraint.
 
 ## Development
 
