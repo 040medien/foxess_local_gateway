@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Provision FoxESS M1 inverters via Bluetooth LE.
+
+Subcommands
+-----------
+- ``scan``         Passive BLE scan for nearby M1 inverters.
+- ``networks MAC`` Connect to one inverter and list the WiFi networks it sees
+                   (read-only; nothing is committed).
+- ``provision MAC [--ssid X] [--passphrase Y]``
+                   Connect, run the bootstrap handshake, write the WiFi
+                   credentials, commit. The inverter associates to the new
+                   AP within a couple of seconds.
+- ``interactive``  Multi-inverter loop: scan, pick one to provision, repeat
+                   until you're done. This is the default when invoked with
+                   no subcommand.
+
+By default SSID and passphrase are read from
+``/etc/foxess-local-cloud/wifi-credentials.txt`` (the installer-generated
+inverter-AP credentials).
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import sys
+from pathlib import Path
+
+
+# Make the daemon package importable both from the source tree (development)
+# and from the installer location (/opt/foxess-local-cloud/).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from foxess_local_cloud import ble_provision as bp
+
+
+DEFAULT_CREDENTIALS_PATH = Path("/etc/foxess-local-cloud/wifi-credentials.txt")
+
+
+def read_pi_ap_credentials(path: Path) -> tuple[str, str]:
+    """Return ``(ssid, passphrase)`` parsed from the installer's credentials file."""
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} not found")
+    ssid = ""
+    passphrase = ""
+    for line in path.read_text().splitlines():
+        if line.startswith("SSID="):
+            ssid = line.split("=", 1)[1].strip()
+        elif line.startswith("Passphrase="):
+            passphrase = line.split("=", 1)[1].strip()
+    if not ssid or not passphrase:
+        raise ValueError(f"could not extract SSID/Passphrase from {path}")
+    return ssid, passphrase
+
+
+def _print_inverter(idx: int, inv: bp.DiscoveredInverter) -> None:
+    label = inv.name if inv.name else "(unnamed)"
+    print(f"  {idx:>2}. {inv.address}  {label:<24} RSSI {inv.rssi:>4} dBm")
+
+
+async def cmd_scan(args: argparse.Namespace) -> int:
+    print(f"Scanning {args.timeout:.0f}s for M1 inverters...")
+    inverters = await bp.scan_for_inverters(timeout=args.timeout)
+    if not inverters:
+        print("No M1 inverters found.", file=sys.stderr)
+        return 1
+    print(f"Found {len(inverters)} inverter(s):")
+    for i, inv in enumerate(inverters, 1):
+        _print_inverter(i, inv)
+    return 0
+
+
+async def cmd_networks(args: argparse.Namespace) -> int:
+    print(f"Connecting to {args.address}...")
+    serial, networks = await bp.list_networks(args.address)
+    print(f"Connected to {serial}.")
+    if not networks:
+        print("The inverter reported no networks in range.")
+        return 1
+    print(f"Visible WiFi networks ({len(networks)}):")
+    for i, net in enumerate(networks, 1):
+        print(f"  {i:>2}. {net.ssid:<32} RSSI {net.rssi:>4} dBm")
+    return 0
+
+
+def _resolve_credentials(args: argparse.Namespace) -> tuple[str, str]:
+    ssid = args.ssid
+    passphrase = args.passphrase
+    if ssid and passphrase:
+        return ssid, passphrase
+    try:
+        file_ssid, file_pass = read_pi_ap_credentials(args.credentials_file)
+    except (FileNotFoundError, ValueError) as exc:
+        if ssid and passphrase:
+            return ssid, passphrase
+        raise SystemExit(
+            f"Could not auto-read AP credentials ({exc}).\n"
+            "Pass --ssid SSID --passphrase PASS explicitly."
+        ) from exc
+    return ssid or file_ssid, passphrase or file_pass
+
+
+async def cmd_provision(args: argparse.Namespace) -> int:
+    ssid, passphrase = _resolve_credentials(args)
+    if not args.yes:
+        print(f"About to provision {args.address} with SSID '{ssid}'.")
+        try:
+            reply = input("Confirm? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 1
+        if reply not in ("y", "yes"):
+            print("Aborted.")
+            return 1
+    print(f"Provisioning {args.address}...")
+    try:
+        serial = await bp.provision(args.address, ssid, passphrase)
+    except bp.ProvisioningError as exc:
+        print(f"Provisioning FAILED: {exc}", file=sys.stderr)
+        return 1
+    print(f"Done. Inverter {serial} will associate to '{ssid}' within a few seconds.")
+    return 0
+
+
+async def cmd_interactive(args: argparse.Namespace) -> int:
+    try:
+        ssid, passphrase = read_pi_ap_credentials(args.credentials_file)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Could not read AP credentials: {exc}", file=sys.stderr)
+        print(
+            "Run the gateway installer first, or use the `provision` subcommand "
+            "with explicit --ssid/--passphrase.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Pi AP credentials loaded: SSID '{ssid}' (passphrase {len(passphrase)} chars).")
+    provisioned: set[str] = set()
+    failed: dict[str, str] = {}
+
+    while True:
+        print()
+        print(f"Scanning {args.timeout:.0f}s for inverters...")
+        inverters = await bp.scan_for_inverters(timeout=args.timeout)
+        candidates = [inv for inv in inverters if inv.address not in provisioned]
+        if not candidates:
+            if provisioned:
+                print(f"No more inverters in range. Provisioned {len(provisioned)} inverter(s).")
+            else:
+                print("No M1 inverters found in range.")
+            return 0 if provisioned else 1
+
+        print(f"Found {len(candidates)} inverter(s) (already-provisioned ones excluded):")
+        for i, inv in enumerate(candidates, 1):
+            note = ""
+            if inv.address in failed:
+                note = f"  [previous attempt failed: {failed[inv.address]}]"
+            _print_inverter(i, inv)
+            if note:
+                print(note)
+
+        try:
+            choice = input(
+                "Select inverter to provision (number, 'a' for all, or Enter to quit): "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            choice = ""
+
+        if choice in ("", "q", "quit", "exit"):
+            print(f"\nDone. Provisioned {len(provisioned)} inverter(s).")
+            return 0
+
+        if choice in ("a", "all"):
+            targets = list(candidates)
+        else:
+            try:
+                idx = int(choice)
+                if not 1 <= idx <= len(candidates):
+                    raise ValueError
+            except ValueError:
+                print("Invalid selection — enter a number from the list, 'a' for all, or Enter to quit.")
+                continue
+            targets = [candidates[idx - 1]]
+
+        for target in targets:
+            print(f"\nProvisioning {target.name} ({target.address}) with SSID '{ssid}'...")
+            try:
+                serial = await bp.provision(target.address, ssid, passphrase)
+                provisioned.add(target.address)
+                failed.pop(target.address, None)
+                print(f"  Done. Inverter {serial} should connect to '{ssid}' shortly.")
+            except bp.ProvisioningError as exc:
+                failed[target.address] = str(exc)
+                print(f"  FAILED: {exc}")
+            except Exception as exc:
+                failed[target.address] = f"{type(exc).__name__}: {exc}"
+                print(f"  FAILED ({type(exc).__name__}): {exc}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="foxess-ble-provision",
+        description="Provision FoxESS M1 inverters via Bluetooth LE.",
+        epilog="With no subcommand, drops into multi-inverter interactive mode.",
+    )
+    parser.add_argument(
+        "--credentials-file",
+        type=Path,
+        default=DEFAULT_CREDENTIALS_PATH,
+        help=f"path to AP credentials file (default: {DEFAULT_CREDENTIALS_PATH})",
+    )
+
+    sub = parser.add_subparsers(dest="command")
+
+    p_scan = sub.add_parser("scan", help="passive BLE scan for nearby M1 inverters")
+    p_scan.add_argument("--timeout", type=float, default=8.0, help="scan duration (s)")
+    p_scan.set_defaults(handler=cmd_scan)
+
+    p_networks = sub.add_parser(
+        "networks",
+        help="connect to one M1 and list visible WiFi networks (read-only)",
+    )
+    p_networks.add_argument("address", help="BLE MAC of the inverter, e.g. 90:E5:B1:44:05:CE")
+    p_networks.set_defaults(handler=cmd_networks)
+
+    p_prov = sub.add_parser("provision", help="write WiFi credentials to one inverter")
+    p_prov.add_argument("address", help="BLE MAC of the inverter")
+    p_prov.add_argument("--ssid", help="WiFi SSID (default: SSID from credentials file)")
+    p_prov.add_argument("--passphrase", help="WPA passphrase (default: from credentials file)")
+    p_prov.add_argument("--yes", action="store_true", help="skip interactive confirmation")
+    p_prov.set_defaults(handler=cmd_provision)
+
+    p_inter = sub.add_parser(
+        "interactive",
+        help="scan, pick inverter(s) to provision, repeat — default when no subcommand",
+    )
+    p_inter.add_argument("--timeout", type=float, default=8.0, help="scan duration per loop (s)")
+    p_inter.set_defaults(handler=cmd_interactive)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if not getattr(args, "handler", None):
+        args.command = "interactive"
+        args.timeout = 8.0
+        args.handler = cmd_interactive
+    try:
+        return asyncio.run(args.handler(args))
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
