@@ -72,8 +72,11 @@ Tested:
 - M1 two-string PV telemetry:
   - PV power, voltage, and current for PV1/PV2.
   - AC power, voltage, current, and frequency.
-  - inverter temperature.
-  - total generation.
+  - Inverter temperature.
+  - Lifetime generation and lifetime grid export.
+  - Operating state (running/idle/fault) and fault state, with the
+    last fault's code, message, and timestamp.
+  - Firmware and hardware versions decoded from the module-info frame.
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
 
@@ -221,6 +224,7 @@ listen
 connect
 registration
 bootstrap_ack
+module_info
 product_info
 telemetry
 mqtt_connected
@@ -297,13 +301,18 @@ accumulate more lifetime energy or hit error states.
 
 The fields that matter for everyday solar monitoring — PV power per
 string, AC power/voltage/current/frequency, inverter temperature,
-operating state, and lifetime energy production — are decoded and
-published as Home Assistant sensors. A handful of 2-byte words in the
+operating state, lifetime generation and lifetime grid export,
+current fault state with the last fault's code/message/timestamp,
+and firmware/hardware versions — are decoded and published as Home
+Assistant sensors. Fault codes are looked up against an embedded
+copy of the FoxESS Q/M-series service manual table, so the
+`last_fault_message` sensor shows the human-readable description
+without needing an internet lookup. A handful of 2-byte words in the
 238-byte telemetry frame still do not have confirmed semantics; they
 are logged as `raw_u16_*` events so they can be inspected over time.
-Likely candidates for those unknowns include error codes, daily-yield
-reset markers, and grid-export sub-counters. Pull requests adding
-field mappings backed by observed data are welcome.
+Likely candidates for those unknowns include daily-yield reset
+markers and grid-export sub-counters. Pull requests adding field
+mappings backed by observed data are welcome.
 
 Q1 four-string PV (PV3/PV4) decoding is implemented model-aware but
 has not yet been validated on actual Q1 hardware. The same applies to
@@ -364,14 +373,16 @@ today.
 ### Could this run on ESP32 / ESPHome instead of a Pi?
 
 In principle yes, but it would be a custom ESPHome component, not a
-YAML-only port. Two awkward parts: an ESP32 can run STA and SoftAP
-simultaneously, but they have to share a single Wi-Fi channel, which
-constrains placement relative to your home Wi-Fi; and acting as a TLS
-server with a custom self-signed cert is not a built-in ESPHome
-feature, so a custom component on top of ESP-IDF's mbedtls would be
-needed. The binary frame decoder is small enough to port to C++, and
-MQTT and HA discovery are easy in ESPHome. Net-net: feasible as an
-ESP32 firmware project, not as a quick port.
+YAML-only port. The awkward part is acting as a TLS server with a
+custom self-signed cert: that is not a built-in ESPHome feature, so
+a custom component on top of ESP-IDF's mbedtls would be needed. The
+binary frame decoder is small enough to port to C++, and MQTT and
+HA discovery are easy in ESPHome. (The "STA and SoftAP must share a
+channel" constraint that some writeups call out as an ESP32 downside
+applies on the Pi Zero W too — its single BCM43438 radio also forces
+`ap0` to follow whatever channel `wlan0` is on — so it's a wash, not
+an ESP32-specific disadvantage.) Net-net: feasible as an ESP32
+firmware project, not as a quick port.
 
 ## Development
 
