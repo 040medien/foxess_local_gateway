@@ -12,7 +12,9 @@ client. No FoxESS Cloud API key is needed.
 
 ## Why Use This
 
-- No data leaves your network after initial setup.
+- No data leaves your network, including during initial setup — the Pi can
+  provision the inverter directly over Bluetooth, so the FoxCloud mobile
+  app is optional.
 - Optional relay mode to the Fox ESS cloud is supported.
 - Inverter telemetry updates every 90 seconds.
 - No polling of data from the FoxESS Cloud API which limits you to one update every 5 minutes.
@@ -60,7 +62,6 @@ FoxESS inverter Wi-Fi
   - Q1-2000-E (not confirmed)
   - Q1-2400-E (not confirmed)
   - Q1-2500-E (not confirmed)
-- The FoxCloud 2.0 app for initial wifi connection (alternatively try the Solakon App)
 - Home Assistant with the Mosquitto Broker app
 
 ## Tested
@@ -150,23 +151,41 @@ isolated inverter Wi-Fi subnet and the FoxESS telemetry port.
 
 ## Connect An Inverter
 
-After installation:
+The installer offers to provision inverters over Bluetooth at the end of
+the install. You can also run the same flow any time later:
 
 ```bash
-sudo foxess-gateway-status
+sudo foxess-ble-provision
 ```
 
-Note the AP SSID and passphrase.
+This drops into an interactive loop: it scans for nearby M1 inverters,
+shows them with their signal strength, and lets you pick which one(s)
+to provision. The Pi's AP credentials are loaded automatically from
+`/etc/foxess-local-cloud/wifi-credentials.txt`. The loop stays running
+until you press Enter to quit, so you can provision several inverters
+in one session.
 
-For an already-installed inverter, use the FoxESS or Solakon mobile app
-to change its Wi-Fi network to the Pi AP. For a new inverter, put its Wi-Fi
-into its normal pairing/config mode and enter the Pi AP SSID and passphrase
-when prompted.
+Other useful invocations:
 
-The out-of-box path for a never-cloud-paired inverter has not been validated
-yet. If initial commissioning requires the FoxESS app and an account, complete
-that step first while having Cloud Relay mode turned on (see below), and provide
-the Wi-Fi configuration of the Pi AP. You can then turn the Cloud Relay off again.
+```bash
+sudo foxess-ble-provision scan                            # list nearby M1s
+sudo foxess-ble-provision networks 90:E5:B1:44:05:CE      # show WiFi networks visible to that inverter (read-only)
+sudo foxess-ble-provision provision <mac> --yes           # one-shot, scripted
+```
+
+If the BLE link drops mid-flow, run it again — the inverter aggressively
+closes idle BLE connections and may take 1–2 retries before a session
+survives long enough to complete the handshake.
+
+### Fallback: configure via the FoxCloud mobile app
+
+If the Bluetooth path doesn't work for your setup, the FoxCloud app's
+normal Wi-Fi configuration flow can also point the inverter at the Pi
+AP. For a brand-new, never-cloud-paired inverter, the project has not
+yet validated a fully cloud-free first commissioning end-to-end; if
+yours requires the app to do its initial association, complete that
+first with Cloud Relay enabled (see below), then switch the inverter
+to the Pi AP using either the Bluetooth flow or the app.
 
 ## Home Assistant
 
@@ -323,7 +342,7 @@ paired with the FoxESS app.
 
 Only if you want to. With `--relay` enabled (the daemon's relay mode),
 every frame is decoded locally *and* re-encrypted and forwarded to
-FoxESS Cloud, so the FoxESS / Solakon app keeps working exactly as
+FoxESS Cloud, so the FoxESS app keeps working exactly as
 before — you just get local MQTT data on top. With `--no-relay`, the
 cloud stops receiving data and the app loses access. You can flip
 between the two by re-running the installer with the corresponding
@@ -384,6 +403,63 @@ inverter access point have to use the same channel. That sounds
 like a downside, but the Pi Zero W has only one radio too, so its
 access point also has to sit on whatever channel your home Wi-Fi
 is using. Both options share that constraint.
+
+## Changelog
+
+Dated, newest first. Only user-facing changes are listed — for the full
+history including refactors and internal scaffolding, see the git log.
+
+### 2026-06-07
+
+- **BLE-based WiFi provisioning.** Point an inverter at the Pi's AP
+  directly from the Pi over Bluetooth — no mobile app required. The
+  installer offers an interactive multi-inverter flow at the end, and
+  `sudo foxess-ble-provision` can be run any time afterwards.
+- README and runbook refresh covering the features added in PRs #7–#10
+  (lifetime export, fault sensors, firmware/hardware versions, fault
+  code table); ESP32/ESPHome FAQ rewritten in plainer language.
+
+### 2026-06-06
+
+- New sensor: **Last Fault Message** — human-readable description from
+  an embedded copy of the FoxESS Q/M-series service-manual fault code
+  table, so the entity reads `"PV1 voltage low"` instead of `0x102`.
+- New sensors: **Last Fault Code** and **Last Fault Time** — track
+  fault transitions, not just current state.
+- New sensor: **Lifetime Grid Export** (`export_total_kwh`). Decoder
+  also handles inverters wired with only one PV string.
+- New sensors: **Firmware Version** and **Hardware Version**, decoded
+  from the module-info frame and surfaced on the HA device card.
+- MQTT keepalive raised to 180 s and reconnect backoff capped at 15 s
+  to avoid spurious disconnects during long telemetry quiet periods.
+- Relay mode falls back to local-only publishing when the upstream
+  FoxESS cloud is unreachable, so MQTT keeps working through outages.
+- FAQ section added, including a writeup of the inverter mesh networking
+  (only one inverter associates to the AP; the others tunnel through it).
+- Hostapd decoupled from the daemon (separate systemd unit) so the AP
+  stays up across daemon restarts.
+- FoxESS cloud certificate pinned by SHA-256 fingerprint on the relay
+  leg; daemon listener scoped to the AP subnet; AP clients isolated
+  from each other and from the LAN.
+- Home Assistant availability handling fixed; duplicate feed-in sensor
+  removed.
+
+### 2026-06-05
+
+- Inverter operating state (running / idle / fault) exposed as a
+  binary sensor.
+- Device names from `config.json` preserved across reinstall.
+
+### 2026-06-04 — initial release
+
+- TCP/14431 frame decoder for the FoxESS proprietary protocol.
+- Home Assistant MQTT auto-discovery: PV power/voltage/current per
+  string, AC power/voltage/current/frequency, inverter temperature,
+  lifetime generation.
+- Optional cloud relay mode while still decoding local telemetry.
+- Pi Zero W installer: isolated inverter AP, nftables TCP/14431
+  redirect (matches any AP-client connection, no dependence on a
+  specific FoxESS cloud IP), and systemd services.
 
 ## Development
 
