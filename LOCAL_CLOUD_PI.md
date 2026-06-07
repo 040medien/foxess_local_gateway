@@ -78,13 +78,44 @@ Check the AP details:
 sudo foxess-gateway-status
 ```
 
-For an already commissioned inverter, use the normal FoxESS Wi-Fi configuration
-flow to change the inverter's Wi-Fi network to the Pi AP SSID and passphrase.
+For an already commissioned inverter, you can either provision the Pi AP
+credentials over Bluetooth (preferred) or use the FoxCloud app's Wi-Fi
+configuration flow.
 
-For a new inverter, use the standard FoxESS commissioning flow first if required
-by your model or installer documentation. The project has not yet validated a
-fully cloud-free first commissioning flow. Once the Wi-Fi module accepts custom
-Wi-Fi credentials, point it at the Pi AP.
+### Bluetooth provisioning from the Pi
+
+```bash
+sudo foxess-ble-provision
+```
+
+This drops into an interactive loop: it scans for nearby M1 inverters,
+shows them with signal strength, and provisions whichever ones you pick.
+The Pi AP SSID and passphrase are read from `wifi-credentials.txt`. The
+loop stays running until you press Enter to quit, so you can provision
+several inverters in one session.
+
+Other useful subcommands:
+
+```bash
+sudo foxess-ble-provision scan                          # list nearby M1s
+sudo foxess-ble-provision networks AA:BB:CC:DD:EE:FF    # list WiFi networks visible to that inverter
+sudo foxess-ble-provision provision <mac> --yes         # one-shot, scripted setup
+```
+
+If the BLE link drops mid-flow, run the command again — the inverter
+aggressively closes idle BLE connections and may need 1–2 retries before
+one survives long enough to complete the handshake.
+
+### FoxCloud app fallback
+
+Use the FoxCloud app's normal Wi-Fi configuration flow to change the
+inverter's Wi-Fi network to the Pi AP SSID and passphrase.
+
+For a new, never-cloud-paired inverter, the project has not yet validated
+a fully cloud-free first commissioning. If your unit ships requiring the
+FoxCloud app to do its initial association, complete that first with Cloud
+Relay turned on; then switch the inverter to the Pi AP via either method
+above.
 
 ## Installed Files
 

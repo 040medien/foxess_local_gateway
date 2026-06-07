@@ -494,7 +494,7 @@ echo "  Relay:     $RELAY_ENABLED"
 
 if [[ "$DRY_RUN" != 1 ]]; then
   apt-get update
-  apt-get install -y python3 python3-venv openssl hostapd dnsmasq nftables iw rsync logrotate
+  apt-get install -y python3 python3-venv python3-bleak openssl hostapd dnsmasq nftables iw rsync logrotate
   systemctl unmask hostapd || true
   systemctl stop foxess-local-cloud.service foxess-hostapd.service foxess-pi-ap.service 2>/dev/null || true
   systemctl stop hostapd dnsmasq || true
@@ -526,7 +526,12 @@ elif [[ "$DRY_RUN" != 1 ]]; then
     --exclude build \
     --exclude venv \
     "$ROOT_DIR/" "$INSTALL_PREFIX/"
-  python3 -m venv "$INSTALL_PREFIX/venv"
+  # The venv inherits system site-packages so it can see python3-bleak (and
+  # its dbus-fast C extension) without pip having to compile it on Pi Zero W.
+  if [[ -d "$INSTALL_PREFIX/venv" ]] && ! grep -q '^include-system-site-packages = true' "$INSTALL_PREFIX/venv/pyvenv.cfg" 2>/dev/null; then
+    rm -rf "$INSTALL_PREFIX/venv"
+  fi
+  python3 -m venv --system-site-packages "$INSTALL_PREFIX/venv"
   "$INSTALL_PREFIX/venv/bin/pip" install --upgrade pip
   "$INSTALL_PREFIX/venv/bin/pip" install -r "$INSTALL_PREFIX/requirements.txt"
   chown -R root:root "$INSTALL_PREFIX"
@@ -556,6 +561,7 @@ render_to "$ROOT_DIR/installer/templates/hostapd-foxess.conf.template" "etc/host
 render_to "$ROOT_DIR/installer/templates/networkmanager-foxess.conf.template" "etc/NetworkManager/conf.d/foxess-local-cloud.conf" 0644
 install_file "$ROOT_DIR/installer/templates/foxess-pi-ap.sh" "usr/local/sbin/foxess-pi-ap" 0755
 install_file "$ROOT_DIR/installer/templates/foxess-gateway-status.sh" "usr/local/sbin/foxess-gateway-status" 0755
+install_file "$ROOT_DIR/installer/templates/foxess-ble-provision.sh" "usr/local/sbin/foxess-ble-provision" 0755
 install_file "$ROOT_DIR/installer/templates/logrotate-foxess-local-cloud.conf" "etc/logrotate.d/foxess-local-cloud" 0644
 install_file "$ROOT_DIR/installer/systemd/foxess-pi-ap.service" "etc/systemd/system/foxess-pi-ap.service" 0644
 install_file "$ROOT_DIR/installer/systemd/foxess-hostapd.service" "etc/systemd/system/foxess-hostapd.service" 0644
@@ -581,4 +587,16 @@ FoxESS inverter Wi-Fi:
   SSID:       $AP_SSID
   Passphrase: $AP_PASSPHRASE
   Saved:      $WIFI_CREDENTIALS_FILE
+
+Point an inverter at this AP either via the FoxCloud mobile app,
+or directly from the Pi via Bluetooth:
+  sudo foxess-ble-provision
 EOF
+
+if [[ "$DRY_RUN" != 1 && "$NONINTERACTIVE" != 1 && -t 0 ]]; then
+  printf '\nRun the interactive BLE provisioning now? [y/N] '
+  read -r reply
+  if [[ "${reply,,}" =~ ^y ]]; then
+    /usr/local/sbin/foxess-ble-provision || true
+  fi
+fi
