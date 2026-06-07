@@ -8,6 +8,10 @@ local connection (TCP/14431), decodes pushed telemetry, and publishes it to MQTT
 with Home Assistant discovery while being connected to your regular wifi as a
 client. No FoxESS Cloud API key is needed.
 
+Inverter setup runs locally too: the Pi can provision new and existing
+inverters directly over Bluetooth, so the FoxESS app and cloud are not
+needed at any point.
+
 ![FoxESS local gateway architecture](docs/images/illustration.png)
 
 ## Why Use This
@@ -78,6 +82,9 @@ Tested:
   - Operating state (running/idle/fault) and fault state, with the
     last fault's code, message, and timestamp.
   - Firmware and hardware versions decoded from the module-info frame.
+  - Mesh role (root or follower) and — for followers — the root
+    inverter's serial, derived from the periodic role-declaration
+    frames the firmware emits.
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
 
@@ -415,6 +422,12 @@ history including refactors and internal scaffolding, see the git log.
   directly from the Pi over Bluetooth — no mobile app required. The
   installer offers an interactive multi-inverter flow at the end, and
   `sudo foxess-ble-provision` can be run any time afterwards.
+- **Mesh topology sensors.** Each inverter now exposes its current
+  role (`root` or `follower`) and the root's serial (when follower)
+  as Home Assistant `Mesh Role` and `Mesh Peer Serial` sensors,
+  derived live from the periodic role-declaration frames. Useful for
+  understanding why the FoxESS cloud sometimes shows a follower as
+  "offline" while it is in fact generating normally.
 - README and runbook refresh covering the features added in PRs #7–#10
   (lifetime export, fault sensors, firmware/hardware versions, fault
   code table); ESP32/ESPHome FAQ rewritten in plainer language.
