@@ -257,12 +257,12 @@ class LocalCloudProtocolTest(unittest.TestCase):
 
     def test_mesh_follower_frame_yields_peer_serial(self) -> None:
         from foxess_local_cloud.protocol import is_mesh_follower_frame, mesh_peer_serial
-        peer = b"60TESTSERIAL000"
+        peer = b"60TESTSERIAL00A"
         payload = b"\x01\x05\x01\x02" + bytes([len(peer)]) + peer + bytes.fromhex("00000100040000031e")
         raw = make_frame(b"\x7f\x7f", b"\x3f\x6a\x25\x8e", 0xE2, payload, b"\xf7\xf7")
         frame = extract_frames(bytearray(raw))[0]
         self.assertTrue(is_mesh_follower_frame(frame))
-        self.assertEqual(mesh_peer_serial(frame), "60TESTSERIAL000")
+        self.assertEqual(mesh_peer_serial(frame), "60TESTSERIAL00A")
 
     def test_mesh_frame_rejects_7e7e_family(self) -> None:
         from foxess_local_cloud.protocol import is_mesh_follower_frame, is_mesh_root_frame
@@ -288,13 +288,13 @@ class LocalCloudProtocolTest(unittest.TestCase):
             payload,
             serial=TEST_SERIAL,
             mesh_role="follower",
-            mesh_peer_serial="60TESTSERIAL000",
+            mesh_peer_serial="60TESTSERIAL00A",
         )
         self.assertEqual(result.mesh_role, "follower")
-        self.assertEqual(result.mesh_peer_serial, "60TESTSERIAL000")
+        self.assertEqual(result.mesh_peer_serial, "60TESTSERIAL00A")
         state = result.as_dict()
         self.assertEqual(state["mesh_role"], "follower")
-        self.assertEqual(state["mesh_peer_serial"], "60TESTSERIAL000")
+        self.assertEqual(state["mesh_peer_serial"], "60TESTSERIAL00A")
 
     def test_decode_telemetry_omits_empty_mesh_state(self) -> None:
         result = decode_telemetry(telemetry_payload(), serial=TEST_SERIAL)
@@ -959,7 +959,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         client = FakeMqttClient()
         publisher = MqttPublisher(
             MqttConfig(host="mqtt.local"),
-            {TEST_SERIAL: "PrivateAlias"},
+            {TEST_SERIAL: "TestInverter"},
             client_factory=lambda: client,
         )
         publisher.connect()
@@ -1615,8 +1615,8 @@ class InstallerTest(unittest.TestCase):
                             "password": "secret",
                         },
                         "devices": {
-                            "60TESTSERIAL0001": "PrivateAlias1",
-                            "60TESTSERIAL000": "PrivateAlias",
+                            "60TESTSERIAL00A": "FirstInverter",
+                            "60TESTSERIAL00B": "SecondInverter",
                         },
                     }
                 ),
@@ -1651,8 +1651,8 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(
                 cfg.devices,
                 {
-                    "60TESTSERIAL0001": "PrivateAlias1",
-                    "60TESTSERIAL000": "PrivateAlias",
+                    "60TESTSERIAL00A": "FirstInverter",
+                    "60TESTSERIAL00B": "SecondInverter",
                 },
             )
 

@@ -91,8 +91,8 @@ Tested:
 - Optional cloud relay mode while still decoding local telemetry.
 - Local control: writable `Active Power Limit` HA entity and Modbus
   polling at configurable cadence (see *Inverter Control* in the
-  runbook). Unit-tested end-to-end; live verification on the PrivateAlias
-  M1-800-E in progress.
+  runbook). Unit-tested end-to-end; live verification on an M1-800-E
+  in progress.
 
 Not yet tested (please let me know if you were able to test it):
 
