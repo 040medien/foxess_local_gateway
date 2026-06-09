@@ -13,6 +13,17 @@ The inverter connects to the Pi AP. TCP/14431 connections from AP clients are
 redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
+Two features in this gateway are unavailable to FoxESS cloud users:
+
+- A writable `Active Power Limit` Home Assistant slider that drives a
+  local Modbus write straight to the inverter. No cloud round-trip.
+- Faster-than-cloud telemetry polling, by injecting local Modbus reads
+  at any cadence (5 s tested) and stripping the responses from the
+  bytes forwarded to FoxCloud.
+
+Both are off by default. See *Inverter Control (opt-in)* below for how
+to enable them and what they do on the wire.
+
 ## Networking Model
 
 The Pi Zero W has one Wi-Fi radio. AP mode and client mode must use the same
