@@ -45,9 +45,9 @@ The Raspberry Pi runs four pieces:
 - A narrow nftables redirect for TCP/14431 traffic from the inverter AP subnet.
 - `foxess-local-cloud`, a Python daemon that decodes the inverter's pushed
   telemetry, publishes MQTT state, and (when *Inverter Control* is enabled)
-  injects local Modbus reads and writes to give Home Assistant faster
-  telemetry and a writable `Active Power Limit` slider — all bypassing the
-  FoxESS cloud.
+  talks to the inverter directly to give Home Assistant faster telemetry
+  and a writable `Active Power Limit` slider — all bypassing the FoxESS
+  cloud.
 - `foxess-ble-provision`, a Bluetooth tool that points inverters at the AP
   during setup, so the FoxESS mobile app isn't needed.
 
