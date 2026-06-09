@@ -231,7 +231,7 @@ class Session:
                 data = await reader.read(4096)
                 if not data:
                     return
-                self.app.logger.emit("relay_decrypted", session=self.session_id, direction="client_to_upstream", bytes=len(data))
+                self.app.logger.emit("relay_decrypted", session=self.session_id, direction="client_to_upstream", bytes=len(data), payload_hex=data.hex(" "))
                 self.buffer.extend(data)
                 for frame in extract_frames(self.buffer):
                     await self.handle_frame(frame, upstream_writer, send_bootstrap=False)
@@ -246,7 +246,7 @@ class Session:
                 data = await upstream_reader.read(4096)
                 if not data:
                     return
-                self.app.logger.emit("relay_decrypted", session=self.session_id, direction="upstream_to_client", bytes=len(data))
+                self.app.logger.emit("relay_decrypted", session=self.session_id, direction="upstream_to_client", bytes=len(data), payload_hex=data.hex(" "))
                 self.upstream_buffer.extend(data)
                 for frame in extract_frames(self.upstream_buffer):
                     self.handle_upstream_frame(frame)

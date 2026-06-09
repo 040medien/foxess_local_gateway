@@ -400,6 +400,14 @@ is using. Both options share that constraint.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-06-09
+
+- **Full payload hex on relay logs.** The `relay_decrypted` log line
+  now includes `payload_hex` in both directions, not just byte length.
+  Useful when reverse-engineering cloud → inverter command frames
+  (e.g. ActivePowerLimit, work modes) that the parser does not yet
+  decode and would otherwise pass through invisibly.
+
 ### 2026-06-07
 
 - **BLE-based WiFi provisioning.** Point an inverter at the Pi's AP
