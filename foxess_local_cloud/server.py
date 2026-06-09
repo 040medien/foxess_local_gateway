@@ -24,12 +24,14 @@ from .protocol import (
     is_mesh_follower_frame,
     is_mesh_root_frame,
     is_modbus_command,
+    is_modbus_read_response,
     is_module_info,
     is_product_info,
     is_registration,
     is_telemetry,
     mesh_peer_serial,
     parse_modbus_command,
+    parse_modbus_read_response,
     module_info,
     product_info,
     registration_serial,
@@ -150,6 +152,9 @@ class Session:
         self.buffer = bytearray()
         self.upstream_buffer = bytearray()
         self.last_telemetry_at: float | None = None
+        # Outstanding read requests keyed by envelope device bytes, so we can
+        # annotate the read response with the address it was asking about.
+        self.pending_reads: dict[bytes, tuple[int, int]] = {}
 
     async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self.app.config.relay.enabled:
@@ -283,10 +288,13 @@ class Session:
         self.app.logger.emit("upstream_frame", **fields)
         if is_modbus_command(frame):
             pdu = parse_modbus_command(frame)
+            if pdu["function"] in (0x03, 0x04):
+                self.pending_reads[bytes(frame.device)] = (pdu["address"], pdu["count"])
             self.app.logger.emit(
                 "command_frame",
                 session=self.session_id,
                 serial=self.serial or "",
+                device=frame.device.hex(),
                 slave=pdu["slave"],
                 function=pdu["function"],
                 function_name=_MODBUS_NAMES.get(pdu["function"], "unknown"),
@@ -356,6 +364,25 @@ class Session:
             )
             self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
             self.last_telemetry_at = time.time()
+        if is_modbus_read_response(frame):
+            pdu = parse_modbus_read_response(frame)
+            pending = self.pending_reads.pop(bytes(frame.device), None)
+            fields: dict[str, Any] = {
+                "session": self.session_id,
+                "serial": self.serial or "",
+                "device": frame.device.hex(),
+                "slave": pdu["slave"],
+                "function": pdu["function"],
+                "function_name": _MODBUS_NAMES.get(pdu["function"], "unknown"),
+                "byte_count": pdu["byte_count"],
+                "values": pdu["values"],
+            }
+            if pending:
+                address, count = pending
+                fields["address"] = address
+                fields["address_hex"] = f"0x{address:04x}"
+                fields["count"] = count
+            self.app.logger.emit("command_response", **fields)
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16

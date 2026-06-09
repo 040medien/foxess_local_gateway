@@ -566,6 +566,41 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pdu["values"][1], 4)  # PFmode enum
         self.assertEqual(pdu["values"][12], 0x2080)  # PflockinV (260.0 * 32)
 
+    async def test_command_response_decodes_and_joins_to_pending_read(self) -> None:
+        from foxess_local_cloud.protocol import is_modbus_read_response, parse_modbus_read_response
+
+        # Synthesised: cloud reads 4 holding regs at 0xC419 (ConfigurationInfo),
+        # inverter responds with [4, 0, 1, 120]. Both frames must share the
+        # same envelope device bytes so the session can join request→response.
+        device = b"\x12\x34\x56\x78"
+
+        request_payload = bytes.fromhex("0103c4190004")
+        request_raw = make_frame(b"\x7f\x7f", device, 0xE2, request_payload, b"\xf7\xf7")
+        request_frame = extract_frames(bytearray(request_raw))[0]
+
+        response_payload = bytes.fromhex("01030800040000000100 78")
+        response_raw = make_frame(b"\x7f\x7f", device, 0xE2, response_payload.replace(b" ", b""), b"\xf7\xf7")
+        response_frame = extract_frames(bytearray(response_raw))[0]
+        self.assertTrue(is_modbus_read_response(response_frame))
+        pdu = parse_modbus_read_response(response_frame)
+        self.assertEqual(pdu["values"], [4, 0, 1, 120])
+
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+
+        session.handle_upstream_frame(request_frame)
+        await session.handle_frame(response_frame, FakeStreamWriter(), send_bootstrap=False)  # type: ignore[arg-type]
+
+        responses = [fields for event, fields in events if event == "command_response"]
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0]["values"], [4, 0, 1, 120])
+        self.assertEqual(responses[0]["address_hex"], "0xc419")
+        self.assertEqual(responses[0]["count"], 4)
+        self.assertEqual(responses[0]["function_name"], "read_holding")
+        self.assertEqual(session.pending_reads, {})
+
     async def test_command_frame_ignores_non_modbus_7f_frames(self) -> None:
         from foxess_local_cloud.protocol import is_modbus_command
 
