@@ -400,6 +400,20 @@ is using. Both options share that constraint.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-06-10
+
+- **Local control of ActivePowerLimit via MQTT (opt-in).** When the
+  installer is run with `--enable-inverter-control`, Home Assistant
+  gets a new writable `Active Power Limit` number entity (0–100 %, 1 %
+  step) that goes straight to the inverter as a Modbus write — no
+  FoxESS cloud round-trip. The daemon also injects a periodic Modbus
+  read of the input-register telemetry block (cadence set by
+  `--inverter-control-poll-interval`, default 30 s) so dashboards and
+  curtailment automations get faster updates than the inverter's 90 s
+  push interval. Responses to these injected requests are stripped
+  from the upstream stream so FoxCloud sees no extra traffic. Feature
+  is disabled by default; enable per-install with the new flags.
+
 ### 2026-06-09
 
 - **Decode inverter → cloud Modbus read responses.** Reads issued by

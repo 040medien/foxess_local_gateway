@@ -24,5 +24,9 @@
     "keepalive_seconds": 180,
     "reconnect_max_delay_seconds": 15,
     "debug": false
+  },
+  "inverter_control": {
+    "enabled": ${INVERTER_CONTROL_ENABLED},
+    "poll_interval_seconds": ${INVERTER_CONTROL_POLL_INTERVAL}
   }
 }

@@ -243,6 +243,49 @@ Disable relay for fully local operation:
 sudo ./installer/install_pi_zero_gateway.sh --no-relay
 ```
 
+## Inverter Control (opt-in)
+
+Off by default. Enable to expose a writable `Active Power Limit` slider
+(0–100%) in Home Assistant and to inject periodic Modbus reads of the
+input-register telemetry block (faster updates than the inverter's own
+~90s push cadence). Responses to these injected requests are stripped
+from the bytes forwarded to FoxCloud, so the cloud sees no extra traffic.
+
+```bash
+sudo ./installer/install_pi_zero_gateway.sh \
+  --enable-inverter-control \
+  --inverter-control-poll-interval 30
+```
+
+To turn it off again:
+
+```bash
+sudo ./installer/install_pi_zero_gateway.sh --disable-inverter-control
+```
+
+What it does on the wire:
+
+- Writes to `Active Power Limit` (Modbus holding register `0xCA5A`,
+  slave 1, value 0–100 in whole percent) when HA publishes to
+  `foxess_m1/<serial>/active_power_limit/set`.
+- Reads `0x277E` for 28 input registers every poll interval.
+- Each injected request uses a 4-byte envelope device field starting
+  with `0x7f`, so the inverter's echoed response is recognisable as
+  ours regardless of the bit-7 toggle the inverter applies, and is
+  filtered out of the upstream forward.
+
+Operational notes:
+
+- The inverter handles one Modbus transaction at a time. Bursty writes
+  (e.g. driving the slider rapidly) can briefly time out cloud-side
+  reads — this is normal and self-corrects within a few seconds.
+- Writes change the inverter's runtime config and are persisted. Don't
+  drive the slider faster than the inverter can settle (a few seconds
+  between changes is plenty).
+- Polling more often than every ~10 seconds is unlikely to give you
+  meaningfully fresher data and increases the chance of colliding with
+  cloud-side reads.
+
 ## Rollback
 
 ```bash
