@@ -171,6 +171,58 @@ def product_info(frame: Frame) -> dict[str, str]:
     return {"module": module, "family": family, "model": model, "firmware": firmware}
 
 
+MODBUS_FN_READ_HOLDING = 0x03
+MODBUS_FN_READ_INPUT = 0x04
+MODBUS_FN_WRITE_SINGLE = 0x06
+MODBUS_FN_WRITE_MULTIPLE = 0x10
+MODBUS_FUNCTIONS = {MODBUS_FN_READ_HOLDING, MODBUS_FN_READ_INPUT, MODBUS_FN_WRITE_SINGLE, MODBUS_FN_WRITE_MULTIPLE}
+
+
+def is_modbus_command(frame: Frame) -> bool:
+    """A 7f7f frame whose payload is a Modbus PDU (slave + function + body).
+
+    Disambiguated from mesh-role declaration frames (which use the same
+    framing but a non-Modbus payload prefix) by checking the function byte
+    against the known Modbus subset we observe on the wire.
+    """
+    if frame.start != b"\x7f\x7f" or len(frame.payload) < 6:
+        return False
+    return frame.payload[1] in MODBUS_FUNCTIONS
+
+
+def parse_modbus_command(frame: Frame) -> dict:
+    """Decode the Modbus PDU inside a 7f7f command frame, or {} if not one."""
+    if not is_modbus_command(frame):
+        return {}
+    payload = frame.payload
+    slave = payload[0]
+    function = payload[1]
+    address = int.from_bytes(payload[2:4], "big")
+    word = int.from_bytes(payload[4:6], "big")
+    if function in (MODBUS_FN_READ_HOLDING, MODBUS_FN_READ_INPUT):
+        return {"slave": slave, "function": function, "address": address, "count": word}
+    if function == MODBUS_FN_WRITE_SINGLE:
+        return {"slave": slave, "function": function, "address": address, "value": word}
+    if function == MODBUS_FN_WRITE_MULTIPLE and len(payload) >= 7:
+        count = word
+        byte_count = payload[6]
+        values: list[int] = []
+        for i in range(count):
+            base = 7 + i * 2
+            if base + 2 > len(payload):
+                break
+            values.append(int.from_bytes(payload[base : base + 2], "big"))
+        return {
+            "slave": slave,
+            "function": function,
+            "address": address,
+            "count": count,
+            "byte_count": byte_count,
+            "values": values,
+        }
+    return {}
+
+
 def is_mesh_root_frame(frame: Frame) -> bool:
     """A 7f7f frame in which the inverter declares it is the mesh root, i.e.
     directly associated to the Pi's AP.

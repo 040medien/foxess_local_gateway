@@ -23,11 +23,13 @@ from .protocol import (
     extract_frames,
     is_mesh_follower_frame,
     is_mesh_root_frame,
+    is_modbus_command,
     is_module_info,
     is_product_info,
     is_registration,
     is_telemetry,
     mesh_peer_serial,
+    parse_modbus_command,
     module_info,
     product_info,
     registration_serial,
@@ -42,6 +44,13 @@ FOXESS_CIPHERS = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
 # self-signed and standard CA validation cannot apply. If FoxESS rotates,
 # update this constant or set relay.skip_cert_verify=true in config.
 FOXESS_UPSTREAM_CERT_SHA256 = "0ff6d2d0b548f0a03dced31ce7621a8c9497bdc074d723bc152094e4d299c1b7"
+
+_MODBUS_NAMES = {
+    0x03: "read_holding",
+    0x04: "read_input",
+    0x06: "write_single",
+    0x10: "write_multiple",
+}
 
 
 class JsonLogger:
@@ -272,6 +281,19 @@ class Session:
         if self.last_telemetry_at is not None:
             fields["seconds_since_last_telemetry"] = round(now - self.last_telemetry_at, 3)
         self.app.logger.emit("upstream_frame", **fields)
+        if is_modbus_command(frame):
+            pdu = parse_modbus_command(frame)
+            self.app.logger.emit(
+                "command_frame",
+                session=self.session_id,
+                serial=self.serial or "",
+                slave=pdu["slave"],
+                function=pdu["function"],
+                function_name=_MODBUS_NAMES.get(pdu["function"], "unknown"),
+                address=pdu["address"],
+                address_hex=f"0x{pdu['address']:04x}",
+                **{k: v for k, v in pdu.items() if k in ("value", "count", "values", "byte_count")},
+            )
 
     async def handle_frame(self, frame: Frame, writer: asyncio.StreamWriter, send_bootstrap: bool = True) -> None:
         self.app.logger.emit(
