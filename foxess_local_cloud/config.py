@@ -24,6 +24,31 @@ class MqttConfig:
 
 
 @dataclass(frozen=True)
+class InverterControl:
+    """Opt-in local Modbus write channel to the inverter.
+
+    When enabled, the daemon may write to the inverter's ActivePowerLimit
+    Modbus holding register on behalf of Home Assistant — without the
+    FoxESS cloud round-trip. Responses to our injected writes are decoded
+    locally and stripped from the upstream-bound bytes so they never reach
+    FoxCloud.
+
+    Scope is intentionally narrow. The cloud's installer portal exposes
+    several other Modbus-writable groups (grid voltage / frequency
+    protection, reactive power modes, start parameters, safety country
+    code, etc.); we do NOT expose those because they are grid-code
+    regulatory settings that should only be changed by a certified
+    installer in coordination with the DSO. See README for the full
+    rationale.
+    """
+
+    enabled: bool = False
+    # Holding-register address of the ActivePowerLimit setting (slave 1,
+    # value in whole percent, mapped 2026-06-09).
+    active_power_limit_address: int = 0xCA5A
+
+
+@dataclass(frozen=True)
 class AppConfig:
     host: str = "0.0.0.0"
     port: int = 14431
@@ -35,6 +60,7 @@ class AppConfig:
     mqtt: MqttConfig = field(default_factory=MqttConfig)
     publish_min_interval_seconds: float = 0.0
     relay: RelayConfig = field(default_factory=lambda: RelayConfig())
+    inverter_control: InverterControl = field(default_factory=InverterControl)
 
 
 @dataclass(frozen=True)
@@ -67,6 +93,7 @@ def load_config(path: Path | None) -> AppConfig:
     raw = _load_raw(path)
     mqtt_raw = raw.get("mqtt", {}) or {}
     relay_raw = raw.get("relay", {}) or {}
+    control_raw = raw.get("inverter_control", {}) or {}
     upstreams: dict[str, tuple[str, int]] = {}
     for original, target in (relay_raw.get("upstreams", {}) or {}).items():
         host, port = str(target).rsplit(":", 1)
@@ -99,6 +126,10 @@ def load_config(path: Path | None) -> AppConfig:
             fallback_to_original_destination=bool(relay_raw.get("fallback_to_original_destination", True)),
             connect_timeout_seconds=float(relay_raw.get("connect_timeout_seconds", 10.0)),
             skip_cert_verify=bool(relay_raw.get("skip_cert_verify", False)),
+        ),
+        inverter_control=InverterControl(
+            enabled=bool(control_raw.get("enabled", False)),
+            active_power_limit_address=int(control_raw.get("active_power_limit_address", 0xCA5A)),
         ),
     )
 

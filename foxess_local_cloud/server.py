@@ -15,12 +15,14 @@ from typing import Any, TextIO
 
 from .cert import ensure_cert
 from .config import AppConfig
+from .local_control import LocalControl, normalize_device
 from .mqtt import MqttPublisher
 from .protocol import (
     BootstrapResponder,
     Frame,
     ascii_text,
     extract_frames,
+    build_modbus_write_single,
     is_mesh_follower_frame,
     is_mesh_root_frame,
     is_modbus_command,
@@ -152,9 +154,85 @@ class Session:
         self.buffer = bytearray()
         self.upstream_buffer = bytearray()
         self.last_telemetry_at: float | None = None
-        # Outstanding read requests keyed by envelope device bytes, so we can
-        # annotate the read response with the address it was asking about.
+        # Outstanding read requests keyed by NORMALIZED envelope device bytes
+        # (first-byte bit 7 cleared, so request and echoed response use the
+        # same key). Used to annotate the read response with the address it
+        # was asking about.
         self.pending_reads: dict[bytes, tuple[int, int]] = {}
+        self.local_control: LocalControl | None = None
+        self._inverter_control_command_registered = False
+        if app.config.inverter_control.enabled:
+            self.local_control = LocalControl(
+                emit=self.app.logger.emit,
+                session_id=self.session_id,
+                register_pending_read=lambda key, addr, count: self.pending_reads.__setitem__(key, (addr, count)),
+            )
+
+    def _maybe_wire_active_power_limit_mqtt(self) -> None:
+        """Once we know the serial, register the HA Number entity and the
+        command-topic handler that translates incoming setpoints into a
+        Modbus write. Idempotent."""
+        if self._inverter_control_command_registered:
+            return
+        if self.local_control is None or not self.serial:
+            return
+        publisher = self.app.mqtt
+        loop = asyncio.get_running_loop()
+
+        def _on_setpoint(percent: int) -> None:
+            # Runs on the MQTT thread; bridge to the asyncio loop.
+            asyncio.run_coroutine_threadsafe(
+                self._handle_active_power_limit_setpoint(percent),
+                loop,
+            )
+
+        publisher.register_active_power_limit_handler(self.serial, _on_setpoint)
+        publisher.publish_active_power_limit_discovery(self.serial)
+        self._inverter_control_command_registered = True
+        # The one-shot read of the current setpoint is deferred until the
+        # first telemetry frame arrives — see handle_frame. Injecting Modbus
+        # at session start (T+~20ms after the inverter's first registration
+        # frame) reliably kills the TLS session with
+        # APPLICATION_DATA_AFTER_CLOSE_NOTIFY; waiting for telemetry is a
+        # natural "session is settled" gate that avoids the fragile window.
+
+    async def _handle_active_power_limit_setpoint(self, percent: int) -> None:
+        if self.local_control is None or not self.serial:
+            return
+        address = self.app.config.inverter_control.active_power_limit_address
+        try:
+            await self.local_control.write_register(address, percent)
+        except Exception as exc:
+            self.app.logger.emit(
+                "active_power_limit_write_error",
+                session=self.session_id,
+                serial=self.serial,
+                value=percent,
+                error=str(exc),
+            )
+            return
+        # Optimistic state publication so HA updates immediately. The next
+        # read of this register (either by us or by the cloud) will correct
+        # it if the inverter clamped/rejected the value.
+        self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
+
+    async def _read_active_power_limit_once(self) -> None:
+        """Inject a one-shot read of the ActivePowerLimit register so HA can
+        show the current setpoint as soon as the inverter is reachable. The
+        response flows through the normal command_response handler, which
+        publishes state via ``publish_active_power_limit_state``."""
+        if self.local_control is None or not self.serial:
+            return
+        address = self.app.config.inverter_control.active_power_limit_address
+        try:
+            await self.local_control.read_holding(address, 1)
+        except Exception as exc:
+            self.app.logger.emit(
+                "active_power_limit_read_error",
+                session=self.session_id,
+                serial=self.serial,
+                error=str(exc),
+            )
 
     async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self.app.config.relay.enabled:
@@ -163,6 +241,8 @@ class Session:
         await self.run_local(reader, writer)
 
     async def run_local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self.local_control is not None:
+            self.local_control.attach_inverter_writer(writer)
         while True:
             data = await reader.read(4096)
             if not data:
@@ -224,6 +304,8 @@ class Session:
                 await self.run_local(reader, writer)
                 return
         self.app.logger.emit("relay_connected", session=self.session_id, upstream_host=upstream_host, upstream_port=upstream_port)
+        if self.local_control is not None:
+            self.local_control.attach_inverter_writer(writer)
         await asyncio.gather(
             self.relay_client_to_upstream(reader, upstream_writer),
             self.relay_upstream_to_client(upstream_reader, writer),
@@ -247,10 +329,30 @@ class Session:
                     return
                 self.app.logger.emit("relay_decrypted", session=self.session_id, direction="client_to_upstream", bytes=len(data), payload_hex=data.hex(" "))
                 self.buffer.extend(data)
-                for frame in extract_frames(self.buffer):
+                # Snapshot what's about to be classified, so we can rebuild a
+                # cloud-bound byte stream that omits responses to our own
+                # injected Modbus requests (the inverter still answers them,
+                # but the cloud must never see those answers).
+                snapshot = bytes(self.buffer)
+                frames = extract_frames(self.buffer)
+                leftover = bytes(self.buffer)
+                consumed = snapshot[: len(snapshot) - len(leftover)]
+                forward = bytearray(consumed)
+                for frame in frames:
                     await self.handle_frame(frame, upstream_writer, send_bootstrap=False)
-                upstream_writer.write(data)
-                await upstream_writer.drain()
+                    if self.local_control is not None and self.local_control.is_our_frame(frame):
+                        idx = forward.find(frame.raw)
+                        if idx >= 0:
+                            del forward[idx : idx + len(frame.raw)]
+                        self.app.logger.emit(
+                            "injected_response_filtered",
+                            session=self.session_id,
+                            device=frame.device.hex(),
+                            bytes=len(frame.raw),
+                        )
+                if forward:
+                    upstream_writer.write(bytes(forward))
+                    await upstream_writer.drain()
         finally:
             upstream_writer.close()
 
@@ -289,7 +391,15 @@ class Session:
         if is_modbus_command(frame):
             pdu = parse_modbus_command(frame)
             if pdu["function"] in (0x03, 0x04):
-                self.pending_reads[bytes(frame.device)] = (pdu["address"], pdu["count"])
+                self.pending_reads[normalize_device(bytes(frame.device))] = (pdu["address"], pdu["count"])
+            # Cloud-originated command frames carry the session marker in
+            # device[3]. Capture it so our injections can mimic it.
+            if (
+                self.local_control is not None
+                and not self.local_control.is_our_frame(frame)
+                and len(frame.device) >= 4
+            ):
+                self.local_control.observe_session_marker(frame.device[3])
             self.app.logger.emit(
                 "command_frame",
                 session=self.session_id,
@@ -323,6 +433,7 @@ class Session:
         if is_registration(frame):
             self.serial = registration_serial(frame)
             self.app.logger.emit("registration", session=self.session_id, serial=self.serial or "")
+            self._maybe_wire_active_power_limit_mqtt()
         if is_product_info(frame):
             info = product_info(frame)
             self.model = info.get("model", "") or self.model
@@ -363,10 +474,16 @@ class Session:
                 mesh_peer_serial=self.mesh_peer_serial,
             )
             self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
+            if (
+                self.last_telemetry_at is None
+                and self.local_control is not None
+                and self._inverter_control_command_registered
+            ):
+                asyncio.create_task(self._read_active_power_limit_once())
             self.last_telemetry_at = time.time()
         if is_modbus_read_response(frame):
             pdu = parse_modbus_read_response(frame)
-            pending = self.pending_reads.pop(bytes(frame.device), None)
+            pending = self.pending_reads.pop(normalize_device(bytes(frame.device)), None)
             fields: dict[str, Any] = {
                 "session": self.session_id,
                 "serial": self.serial or "",
@@ -383,6 +500,14 @@ class Session:
                 fields["address_hex"] = f"0x{address:04x}"
                 fields["count"] = count
             self.app.logger.emit("command_response", **fields)
+            if (
+                pending
+                and self.local_control is not None
+                and self.serial
+                and pending[0] == self.app.config.inverter_control.active_power_limit_address
+                and pdu["values"]
+            ):
+                self.app.mqtt.publish_active_power_limit_state(self.serial, int(pdu["values"][0]))
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16

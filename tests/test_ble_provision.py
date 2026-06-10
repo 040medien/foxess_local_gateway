@@ -33,7 +33,7 @@ from foxess_local_cloud.ble_provision import (
 CAPTURED_TAIL = b"\x6a\x25\x28"
 
 
-def _registration_frame_with_tail(tail: bytes, serial: str = "60TESTSERIAL000") -> p.Frame:
+def _registration_frame_with_tail(tail: bytes, serial: str = "60TESTSERIAL00A") -> p.Frame:
     """Build a registration frame whose bootstrap-derived tail equals ``tail``."""
     raw_tail_int = (int.from_bytes(tail, "big") + 0x71) & 0xFFFFFF
     device = b"\x2a" + raw_tail_int.to_bytes(3, "big")
@@ -206,8 +206,8 @@ class TestScanResponseParser(unittest.TestCase):
 
 class TestDiscoveredInverter(unittest.TestCase):
     def test_serial_extracted_from_name(self):
-        d = DiscoveredInverter(address="AA:BB:CC:DD:EE:FF", name="MI_60TESTSERIAL0001", rssi=-45)
-        self.assertEqual(d.serial, "60TESTSERIAL0001")
+        d = DiscoveredInverter(address="AA:BB:CC:DD:EE:FF", name="MI_60TESTSERIAL00B", rssi=-45)
+        self.assertEqual(d.serial, "60TESTSERIAL00B")
 
     def test_serial_empty_when_name_not_mi_prefixed(self):
         d = DiscoveredInverter(address="00:11:22:33:44:55", name="OtherDevice", rssi=-60)
