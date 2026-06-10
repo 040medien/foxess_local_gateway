@@ -189,12 +189,12 @@ class Session:
         publisher.register_active_power_limit_handler(self.serial, _on_setpoint)
         publisher.publish_active_power_limit_discovery(self.serial)
         self._inverter_control_command_registered = True
-        # Diagnostic experiment 2026-06-10: dropping the session-start one-shot
-        # read. Injecting Modbus at T+~20ms after the inverter's first
-        # registration frame consistently kills the TLS session with
-        # APPLICATION_DATA_AFTER_CLOSE_NOTIFY (the earlier 5s-delayed polling
-        # loop never had this problem). HA state will start as "unknown"
-        # until the next user setpoint or cloud read response refreshes it.
+        # The one-shot read of the current setpoint is deferred until the
+        # first telemetry frame arrives — see handle_frame. Injecting Modbus
+        # at session start (T+~20ms after the inverter's first registration
+        # frame) reliably kills the TLS session with
+        # APPLICATION_DATA_AFTER_CLOSE_NOTIFY; waiting for telemetry is a
+        # natural "session is settled" gate that avoids the fragile window.
 
     async def _handle_active_power_limit_setpoint(self, percent: int) -> None:
         if self.local_control is None or not self.serial:
@@ -474,6 +474,12 @@ class Session:
                 mesh_peer_serial=self.mesh_peer_serial,
             )
             self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
+            if (
+                self.last_telemetry_at is None
+                and self.local_control is not None
+                and self._inverter_control_command_registered
+            ):
+                asyncio.create_task(self._read_active_power_limit_once())
             self.last_telemetry_at = time.time()
         if is_modbus_read_response(frame):
             pdu = parse_modbus_read_response(frame)

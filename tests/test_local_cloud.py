@@ -1039,6 +1039,65 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         state_publishes = [(topic, payload) for topic, payload, _retain in client.published if topic == state_topic]
         self.assertEqual(state_publishes, [(state_topic, "75")])
 
+    async def test_active_power_limit_read_deferred_until_first_telemetry(self) -> None:
+        """The one-shot read of the current setpoint must fire on the FIRST
+        telemetry frame (a natural settled-session marker) — never at
+        session-start, and never more than once per session.
+
+        Background: injecting Modbus at T+~20ms after the inverter's first
+        registration frame reliably kills the TLS session with
+        APPLICATION_DATA_AFTER_CLOSE_NOTIFY (observed live 2026-06-10). The
+        first telemetry frame is a known-good gate past the fragile window.
+        """
+        import asyncio
+
+        from foxess_local_cloud.config import InverterControl
+
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(
+            AppConfig(
+                mqtt=MqttConfig(host="mqtt.local"),
+                inverter_control=InverterControl(enabled=True),
+            )
+        )
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+        session.model = "M1-800-E"
+
+        class ClosableWriter(FakeStreamWriter):
+            def close(self) -> None:
+                return None
+
+        writer = ClosableWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+        # Register HA discovery + handler but do NOT fire any read yet.
+        session._maybe_wire_active_power_limit_mqtt()
+        # No frames written to the inverter at session start.
+        self.assertEqual(len(writer.writes), 0)
+        self.assertEqual(len(session.local_control._outstanding), 0)  # type: ignore[union-attr]
+
+        # First telemetry frame → exactly one read should be injected.
+        frame = extract_frames(bytearray(telemetry_frame()))[0]
+        await session.handle_frame(frame, writer, send_bootstrap=False)  # type: ignore[arg-type]
+        await asyncio.sleep(0)  # let create_task() actually run
+        self.assertEqual(
+            len(session.local_control._outstanding),  # type: ignore[union-attr]
+            1,
+            "first telemetry must trigger the one-shot read",
+        )
+
+        # Second telemetry frame → no additional reads.
+        frame2 = extract_frames(bytearray(telemetry_frame()))[0]
+        await session.handle_frame(frame2, writer, send_bootstrap=False)  # type: ignore[arg-type]
+        await asyncio.sleep(0)
+        self.assertEqual(
+            len(session.local_control._outstanding),  # type: ignore[union-attr]
+            1,
+            "subsequent telemetry must not re-trigger the read",
+        )
+
     def test_mqtt_active_power_limit_discovery_idempotent_per_serial(self) -> None:
         client = FakeMqttClient()
         publisher = MqttPublisher(MqttConfig(host="mqtt.local"), {}, client_factory=lambda: client)
