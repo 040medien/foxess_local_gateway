@@ -997,6 +997,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discovery_payload["unit_of_measurement"], "%")
         self.assertEqual(discovery_payload["command_topic"], publisher.active_power_limit_command_topic(TEST_SERIAL))
         self.assertEqual(discovery_payload["state_topic"], state_topic)
+        self.assertEqual(discovery_payload["device"]["serial_number"], TEST_SERIAL)
         self.assertEqual(topics[state_topic], "99")
 
     async def test_session_publishes_active_power_limit_state_on_read_response(self) -> None:
@@ -1233,6 +1234,9 @@ class MqttPublisherTest(unittest.TestCase):
         device = configs[0]["device"]
         self.assertEqual(device["sw_version"], "1.80")
         self.assertEqual(device["hw_version"], "M10200")
+        # serial_number lets HA show the inverter's own serial on the
+        # device card; without it the only visible serial is mesh_peer_serial.
+        self.assertEqual(device["serial_number"], TEST_SERIAL)
         # firmware/module shouldn't appear as their own sensors
         unique_ids = {c["unique_id"] for c in configs}
         self.assertFalse(any(uid.endswith("_firmware") or uid.endswith("_module") for uid in unique_ids))

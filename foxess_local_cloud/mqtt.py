@@ -178,7 +178,7 @@ class MqttPublisher:
         serial = telemetry.serial
         name = self.device_names.get(serial, serial)
         model = telemetry.model or self.model_by_serial.get(serial) or "FoxESS inverter"
-        device: dict[str, Any] = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model}
+        device: dict[str, Any] = {"identifiers": [f"foxess_{serial}"], "name": name, "manufacturer": "FoxESS", "model": model, "serial_number": serial}
         if telemetry.firmware:
             device["sw_version"] = telemetry.firmware
         if telemetry.module:
@@ -319,6 +319,7 @@ class MqttPublisher:
             "name": name,
             "manufacturer": "FoxESS",
             "model": model,
+            "serial_number": serial,
         }
         config_topic = f"{self.config.discovery_prefix}/number/foxess_{serial}/active_power_limit/config"
         payload: dict[str, Any] = {
