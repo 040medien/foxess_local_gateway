@@ -20,10 +20,16 @@ Off by default. See *Inverter Control (opt-in)* below for how to
 enable it and what it does on the wire.
 
 The same opt-in also enables a periodic injected Modbus read of the
-device's input-register window for diagnostics and future protocol
-work — the response values currently land in `journald` as
-`command_response` events but aren't yet decoded into HA entities.
-The cloud receives none of the injected traffic.
+input-register window at `0x277E` count 28. The response carries 25
+u16 values (the last 3 are the request echoed back). The daemon
+publishes those 25 values both as raw JSON on
+`foxess_m1/<serial>/input_registers/277e/state` and as 25 individual
+diagnostic HA sensors named `Input Reg 00`..`Input Reg 24`
+(`entity_category=diagnostic`, `enabled_by_default=false` — opt-in
+per entity in the HA UI). Meanings of individual positions are not
+fully decoded yet — the inverter appears to refresh the snapshot at
+an internal interval rather than every poll, so values are static
+much of the time. The cloud receives none of the injected traffic.
 
 ## Networking Model
 

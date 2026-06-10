@@ -525,6 +525,20 @@ class Session:
                 and pdu["values"]
             ):
                 self.app.mqtt.publish_active_power_limit_state(self.serial, int(pdu["values"][0]))
+            # Input-register block (default 0x277E count 28): the last 3 u16
+            # values in the response are the request bytes echoed back, not
+            # data. Publish the first 25 to MQTT so HA can expose them as
+            # diagnostic sensors for downstream decoding work.
+            if (
+                pending
+                and self.local_control is not None
+                and self.serial
+                and pdu["function"] == 0x04
+                and pending[0] == self.app.config.inverter_control.telemetry_input_address
+                and len(pdu["values"]) >= 4
+            ):
+                data_values = pdu["values"][:-3] if len(pdu["values"]) > 3 else pdu["values"]
+                self.app.mqtt.publish_input_register_snapshot(self.serial, list(data_values))
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16

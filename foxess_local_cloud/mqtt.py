@@ -35,6 +35,7 @@ class MqttPublisher:
         # the Session that owns the inverter.
         self._command_handlers: dict[str, Callable[[str, str], None]] = {}
         self._active_power_limit_announced: set[str] = set()
+        self._input_register_announced: set[str] = set()
 
     @property
     def enabled(self) -> bool:
@@ -84,6 +85,7 @@ class MqttPublisher:
     def _on_disconnect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         self.announced.clear()
         self._active_power_limit_announced.clear()
+        self._input_register_announced.clear()
         self.emit("mqtt_disconnected", host=self.config.host, port=self.config.port, reason=str(reason_code))
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
@@ -144,6 +146,54 @@ class MqttPublisher:
                 self.client.subscribe(topic)
             except Exception as exc:
                 self.emit("mqtt_subscribe_error", topic=topic, error=str(exc))
+
+    def input_register_state_topic(self, serial: str) -> str:
+        return f"{self.config.topic_prefix}/{serial}/input_registers/277e/state"
+
+    def publish_input_register_snapshot(self, serial: str, values: list[int]) -> None:
+        """Publish raw u16 values polled from input-register block 0x277E.
+
+        These come from the local-Modbus injection path. Meanings are not
+        fully decoded — values appear to be a snapshot the inverter refreshes
+        infrequently (not per-poll), and we publish them so HA users can
+        build template sensors as the community decodes more fields. Position
+        meanings collected so far in docs/MEMORY notes."""
+        if not self.enabled or self.client is None or not serial or not values:
+            return
+        topic = self.input_register_state_topic(serial)
+        self._publish(topic, json.dumps({"values": values}, separators=(",", ":")), retain=self.config.retain)
+        self._publish_input_register_discovery(serial, len(values))
+
+    def _publish_input_register_discovery(self, serial: str, count: int) -> None:
+        if serial in self._input_register_announced:
+            return
+        name = self.device_names.get(serial, serial)
+        model = self.model_by_serial.get(serial, "FoxESS inverter")
+        device: dict[str, Any] = {
+            "identifiers": [f"foxess_{serial}"],
+            "name": name,
+            "manufacturer": "FoxESS",
+            "model": model,
+        }
+        state_topic = self.input_register_state_topic(serial)
+        availability = self._availability_block(serial)
+        for i in range(count):
+            config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/input_reg_{i:02d}/config"
+            payload: dict[str, Any] = {
+                "name": f"Input Reg {i:02d}",
+                "unique_id": f"foxess_{serial}_input_reg_{i:02d}",
+                "object_id": f"foxess_{serial}_input_reg_{i:02d}",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.values[" + str(i) + "] }}",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "availability": availability,
+                "availability_mode": "all",
+                "device": device,
+                "enabled_by_default": False,
+            }
+            self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
+        self._input_register_announced.add(serial)
 
     def publish_active_power_limit_state(self, serial: str, value: int) -> None:
         if not self.enabled or self.client is None or not serial:
