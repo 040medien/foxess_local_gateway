@@ -9,63 +9,18 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
-Headline feature the FoxESS cloud doesn't give regular users:
-
-- **Set `Active Power Limit` directly from Home Assistant.** A writable
-  HA slider that drives a local Modbus write straight to the inverter —
-  no FoxCloud round-trip, no installer-portal account required. Useful
-  for curtailing solar during negative electricity prices (common in NL
-  on sunny weekends), demand-charge avoidance, or any automation the
-  cloud's web UI can't reach. The write response is stripped from the
-  upstream stream so FoxCloud sees nothing.
-
-And the rest:
-
 - No data leaves your network, including during initial setup — the Pi can
   provision the inverter directly over Bluetooth, so the FoxCloud mobile
   app is optional.
 - Optional relay mode to the Fox ESS cloud is supported.
 - MQTT auto discovery creates Home Assistant sensors automatically, neatly bundled into one
   device per inverter.
+- Writable `Active Power Limit` slider in Home Assistant (opt-in) for
+  curtailment during negative electricity prices or demand-charge avoidance.
 - No Home Assistant HACS Add-ons needed
 - Continue using your inverter even if the FoxESS cloud changes, is offline or gets disabled.
 - Works with multiple inverters connected through the Pi AP at the same time, even if they use
   their own mesh network.
-
-## What we deliberately don't expose
-
-The FoxESS installer portal also lets a certified installer change other
-Modbus-writable groups on the M1: `GridVoltageParameters` (OVP/UVP),
-`GridFreqParameters` (OFP/UFP), `PowerFreCon` (frequency derating curve),
-`ReactiveConfig` (PF / Q(U) / cosφ modes), `StartParameters`, and
-`SafetyCountry`. The local-Modbus channel here can technically write
-those too — we deliberately don't expose them. They are grid-code
-**regulatory settings**: changing OVP/UVP thresholds or country-code
-parameters can put the inverter out of conformance with EN 50549 (or
-the local equivalent), risk nuisance trips during grid faults, and
-void the connection contract you have with your DSO. The FoxESS cloud
-hides them behind an installer account for the same reason. If you
-have a real reason to touch them — e.g. a DSO request to enable
-`Q(U)mode` for over-voltage suppression — do it through your
-installer via the official portal, not through this gateway.
-
-`Active Power Limit` is the exception: it is a non-safety setpoint
-that's expected to change during normal operation (curtailment for
-dynamic tariffs, demand-charge avoidance), and exposing it via HA is
-the substantive win of this PR over the cloud-only path.
-
-## A note on Modbus and live telemetry
-
-We mapped the inverter's full Modbus surface (input + holding registers
-across the 16-bit address space, all standard function codes, all
-slave IDs) and confirmed there is **no register block that delivers
-live telemetry faster than the inverter's own ~90 s push frame**. The
-one input-register window the cloud reads (`0x277E`, 28 registers) is
-a slow snapshot the firmware refreshes only on inverter boot — not on
-poll, not on session reconnect, and not in response to writes. So
-polling Modbus harder than 90 s buys nothing: the values don't move.
-The push-frame decoder remains the only source of varying measurement
-data, and we use that as Home Assistant's telemetry feed.
 
 ## What This Does
 
@@ -128,7 +83,14 @@ Not yet tested (please let me know if you were able to test it):
 - Brand-new, never-commissioned inverter setup without using the FoxESS app.
 - Q1 devices with four PV inputs. The decoder has model-aware PV3/PV4 support,
   but this still needs validation on a real Q1 inverter.
-- Other FoxESS inverter families (likely won’t work).
+- Newer FoxESS single-phase **hybrid** inverters (battery-equipped models in
+  the same single-phase family as the M1/Q1). The transport layer should be
+  the same, so they may work for the existing fields out of the box, but the
+  battery-related telemetry fields aren't decoded yet. **If you own one,
+  please try it and send a journald log (`sudo journalctl -u
+  foxess-local-cloud.service > foxess.log`)** so we can extend the decoder.
+- Other FoxESS inverter families (three-phase, AIO, EVO etc. — likely
+  won't work without separate protocol work).
 
 ## Home Assistant Prerequisites
 
@@ -444,6 +406,24 @@ inverter access point have to use the same channel. That sounds
 like a downside, but the Pi Zero W has only one radio too, so its
 access point also has to sit on whatever channel your home Wi-Fi
 is using. Both options share that constraint.
+
+### Can I change other inverter settings from Home Assistant?
+
+No — only `Active Power Limit`. The FoxESS installer portal also
+exposes grid-protection thresholds, reactive-power modes, and the
+country/grid-code preset, but those are regulatory settings that
+should only be touched by a certified installer in coordination
+with your grid operator. If you need one changed, ask your
+installer to do it via the FoxESS portal.
+
+### Can the gateway update telemetry faster than ~90 seconds?
+
+No. We mapped the inverter's full Modbus surface looking for a
+live-data register block and didn't find one — the only readable
+window the inverter exposes is a snapshot it refreshes when it
+boots, not when you ask. The ~90-second push frame the inverter
+sends on its own is the fastest live data available, and that's
+what Home Assistant gets.
 
 ## Changelog
 

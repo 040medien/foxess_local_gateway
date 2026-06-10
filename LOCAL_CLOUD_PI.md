@@ -13,20 +13,8 @@ The inverter connects to the Pi AP. TCP/14431 connections from AP clients are
 redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
-One feature here is unavailable to FoxESS cloud users: a writable
-`Active Power Limit` Home Assistant slider that drives a local Modbus
-write straight to the inverter, with no cloud round-trip. Off by
-default. See *Inverter Control (opt-in)* below.
-
-Other regulatory installer-portal settings (grid voltage/frequency
-protection, reactive power modes, country code) are deliberately
-**not** exposed — see *What we deliberately don't expose* in the
-README for the rationale. The local Modbus interface was also
-investigated as a possible live-telemetry source and found to be
-unusable for that: the only readable register block is a static
-snapshot the firmware refreshes on boot, not in response to polling.
-Live measurement data continues to flow from the inverter's native
-~90 s push frame.
+An opt-in writable `Active Power Limit` slider for Home Assistant is
+available — see *Inverter Control (opt-in)* below.
 
 ## Networking Model
 
@@ -296,32 +284,9 @@ Operational notes:
   flash. Don't drive the slider faster than the inverter can settle
   (a few seconds between changes is plenty).
 
-### What we don't expose, and why
-
-The same local Modbus channel can technically write the FoxESS
-installer portal's other groups (`GridVoltageParameters`,
-`GridFreqParameters`, `PowerFreCon`, `ReactiveConfig`,
-`StartParameters`, `SafetyCountry`). We deliberately don't surface
-those in Home Assistant — they are regulatory grid-code settings,
-not user-changeable knobs. Editing OVP/UVP thresholds, frequency
-derating curves, or country code can put the inverter out of
-conformance with EN 50549 / VDE-AR-N 4105 / equivalent, cause
-nuisance trips, and break your DSO contract. If a real reason
-exists (e.g. DSO request to enable `Q(U)mode`), do it through
-your certified installer via the FoxESS portal.
-
-### About live telemetry over Modbus
-
-We mapped the inverter's full Modbus surface across all standard
-function codes, the entire 16-bit input + holding address space at
-multiple stride densities, and all slave IDs 1–10. Result: only one
-input-register window is readable (`0x277E`, 28 registers), and its
-values are a **static snapshot the firmware refreshes only on
-inverter boot** — not on poll, not on write, not on session
-reconnect. So polling Modbus harder than the inverter's native
-~90 s push interval doesn't give faster telemetry. The push frame
-remains the only varying source, and that's what the daemon already
-decodes into MQTT.
+Only `Active Power Limit` is exposed for write — see the README FAQ
+for why other installer-portal settings aren't, and why Modbus
+polling doesn't give faster-than-push telemetry.
 
 ## Rollback
 
