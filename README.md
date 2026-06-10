@@ -9,12 +9,27 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
+Two features the FoxESS cloud cannot give you, available here as an opt-in:
+
+- **Set `Active Power Limit` directly from Home Assistant.** A writable
+  HA slider that drives a local Modbus write straight to the inverter —
+  no FoxCloud round-trip, no installer-portal account required. Useful
+  for curtailing solar during negative electricity prices (common in NL
+  on sunny weekends), demand-charge avoidance, or any automation the
+  cloud's web UI can't reach.
+- **Faster telemetry than the cloud ever sees.** Bypass the inverter's
+  ~90 s native push by polling its Modbus input registers at any cadence
+  (tested down to 5 s). FoxESS's own dashboard can't do this and the
+  public Cloud API caps you at one read per 5 minutes. Responses to our
+  polls are stripped from the bytes forwarded to FoxCloud so the cloud
+  experience stays untouched.
+
+And the rest:
+
 - No data leaves your network, including during initial setup — the Pi can
   provision the inverter directly over Bluetooth, so the FoxCloud mobile
   app is optional.
 - Optional relay mode to the Fox ESS cloud is supported.
-- Inverter telemetry updates every 90 seconds.
-- No polling of data from the FoxESS Cloud API which limits you to one update every 5 minutes.
 - MQTT auto discovery creates Home Assistant sensors automatically, neatly bundled into one
   device per inverter.
 - No Home Assistant HACS Add-ons needed
@@ -28,8 +43,11 @@ The Raspberry Pi runs four pieces:
 
 - `hostapd`/`dnsmasq` for an inverter-only Wi-Fi AP.
 - A narrow nftables redirect for TCP/14431 traffic from the inverter AP subnet.
-- `foxess-local-cloud`, a Python daemon that decodes telemetry and publishes
-  MQTT state.
+- `foxess-local-cloud`, a Python daemon that decodes the inverter's pushed
+  telemetry, publishes MQTT state, and (when *Inverter Control* is enabled)
+  talks to the inverter directly to give Home Assistant faster telemetry
+  and a writable `Active Power Limit` slider — all bypassing the FoxESS
+  cloud.
 - `foxess-ble-provision`, a Bluetooth tool that points inverters at the AP
   during setup, so the FoxESS mobile app isn't needed.
 
@@ -71,6 +89,10 @@ Tested:
     frames the firmware emits.
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
+- Local control: writable `Active Power Limit` HA entity and Modbus
+  polling at configurable cadence (see *Inverter Control* in the
+  runbook). Unit-tested end-to-end; live verification on an M1-800-E
+  in progress.
 
 Not yet tested (please let me know if you were able to test it):
 
@@ -78,7 +100,6 @@ Not yet tested (please let me know if you were able to test it):
 - Q1 devices with four PV inputs. The decoder has model-aware PV3/PV4 support,
   but this still needs validation on a real Q1 inverter.
 - Other FoxESS inverter families (likely won’t work).
-- Active polling to enable faster than the inverter's 90 seconds telemetry cadence.
 
 ## Home Assistant Prerequisites
 
@@ -399,6 +420,20 @@ is using. Both options share that constraint.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-06-10
+
+- **Local control of ActivePowerLimit via MQTT (opt-in).** When the
+  installer is run with `--enable-inverter-control`, Home Assistant
+  gets a new writable `Active Power Limit` number entity (0–100 %, 1 %
+  step) that goes straight to the inverter as a Modbus write — no
+  FoxESS cloud round-trip. The daemon also injects a periodic Modbus
+  read of the input-register telemetry block (cadence set by
+  `--inverter-control-poll-interval`, default 30 s) so dashboards and
+  curtailment automations get faster updates than the inverter's 90 s
+  push interval. Responses to these injected requests are stripped
+  from the upstream stream so FoxCloud sees no extra traffic. Feature
+  is disabled by default; enable per-install with the new flags.
 
 ### 2026-06-09
 

@@ -177,6 +177,42 @@ MODBUS_FN_WRITE_SINGLE = 0x06
 MODBUS_FN_WRITE_MULTIPLE = 0x10
 MODBUS_FUNCTIONS = {MODBUS_FN_READ_HOLDING, MODBUS_FN_READ_INPUT, MODBUS_FN_WRITE_SINGLE, MODBUS_FN_WRITE_MULTIPLE}
 
+# Envelope function byte the FoxESS cloud uses for all observed Modbus
+# command frames (requests + responses, both directions).
+COMMAND_ENVELOPE_FUNC = 0xE2
+
+# First byte of the 4-byte envelope "device" field that the daemon uses for
+# its OWN injected requests. The inverter echoes the device bytes back in
+# the response with bit 7 set (0x7f | 0x80 = 0xff), so we can recognise
+# both halves of an injected round-trip by ``(device[0] & 0x7f) == 0x7f``.
+# The cloud has been observed using 0x11 / 0x12 here, so 0x7f is clearly
+# outside its allocation.
+INJECTED_DEVICE_MARKER = 0x7F
+
+
+def is_injected_device(device: bytes) -> bool:
+    """True iff this 4-byte envelope device field belongs to a request the
+    daemon injected (or its echoed response)."""
+    return len(device) >= 1 and (device[0] & 0x7F) == INJECTED_DEVICE_MARKER
+
+
+def build_modbus_write_single(device: bytes, address: int, value: int) -> bytes:
+    """Build a 7f7f-envelope frame carrying a Modbus write-single-register PDU."""
+    pdu = bytes([0x01, MODBUS_FN_WRITE_SINGLE]) + address.to_bytes(2, "big") + value.to_bytes(2, "big")
+    return make_frame(b"\x7f\x7f", device, COMMAND_ENVELOPE_FUNC, pdu, b"\xf7\xf7")
+
+
+def build_modbus_read_holding(device: bytes, address: int, count: int) -> bytes:
+    """Build a 7f7f-envelope frame carrying a Modbus read-holding-registers PDU."""
+    pdu = bytes([0x01, MODBUS_FN_READ_HOLDING]) + address.to_bytes(2, "big") + count.to_bytes(2, "big")
+    return make_frame(b"\x7f\x7f", device, COMMAND_ENVELOPE_FUNC, pdu, b"\xf7\xf7")
+
+
+def build_modbus_read_input(device: bytes, address: int, count: int) -> bytes:
+    """Build a 7f7f-envelope frame carrying a Modbus read-input-registers PDU."""
+    pdu = bytes([0x01, MODBUS_FN_READ_INPUT]) + address.to_bytes(2, "big") + count.to_bytes(2, "big")
+    return make_frame(b"\x7f\x7f", device, COMMAND_ENVELOPE_FUNC, pdu, b"\xf7\xf7")
+
 
 def is_modbus_command(frame: Frame) -> bool:
     """A 7f7f frame whose payload is a Modbus PDU (slave + function + body).

@@ -257,12 +257,12 @@ class LocalCloudProtocolTest(unittest.TestCase):
 
     def test_mesh_follower_frame_yields_peer_serial(self) -> None:
         from foxess_local_cloud.protocol import is_mesh_follower_frame, mesh_peer_serial
-        peer = b"60TESTSERIAL000"
+        peer = b"60TESTSERIAL00A"
         payload = b"\x01\x05\x01\x02" + bytes([len(peer)]) + peer + bytes.fromhex("00000100040000031e")
         raw = make_frame(b"\x7f\x7f", b"\x3f\x6a\x25\x8e", 0xE2, payload, b"\xf7\xf7")
         frame = extract_frames(bytearray(raw))[0]
         self.assertTrue(is_mesh_follower_frame(frame))
-        self.assertEqual(mesh_peer_serial(frame), "60TESTSERIAL000")
+        self.assertEqual(mesh_peer_serial(frame), "60TESTSERIAL00A")
 
     def test_mesh_frame_rejects_7e7e_family(self) -> None:
         from foxess_local_cloud.protocol import is_mesh_follower_frame, is_mesh_root_frame
@@ -288,13 +288,13 @@ class LocalCloudProtocolTest(unittest.TestCase):
             payload,
             serial=TEST_SERIAL,
             mesh_role="follower",
-            mesh_peer_serial="60TESTSERIAL000",
+            mesh_peer_serial="60TESTSERIAL00A",
         )
         self.assertEqual(result.mesh_role, "follower")
-        self.assertEqual(result.mesh_peer_serial, "60TESTSERIAL000")
+        self.assertEqual(result.mesh_peer_serial, "60TESTSERIAL00A")
         state = result.as_dict()
         self.assertEqual(state["mesh_role"], "follower")
-        self.assertEqual(state["mesh_peer_serial"], "60TESTSERIAL000")
+        self.assertEqual(state["mesh_peer_serial"], "60TESTSERIAL00A")
 
     def test_decode_telemetry_omits_empty_mesh_state(self) -> None:
         result = decode_telemetry(telemetry_payload(), serial=TEST_SERIAL)
@@ -398,6 +398,37 @@ class LocalCloudProtocolTest(unittest.TestCase):
     def test_config_loads_relay_skip_cert_verify(self) -> None:
         cfg = load_config(ROOT / "local-cloud.example.json")
         self.assertFalse(cfg.relay.skip_cert_verify)
+
+    def test_inverter_control_defaults_to_disabled(self) -> None:
+        cfg = load_config(ROOT / "local-cloud.example.json")
+        self.assertFalse(cfg.inverter_control.enabled)
+        # Sensible defaults even when section omitted entirely.
+        self.assertEqual(cfg.inverter_control.poll_interval_seconds, 30)
+        self.assertEqual(cfg.inverter_control.active_power_limit_address, 0xCA5A)
+        self.assertEqual(cfg.inverter_control.telemetry_input_address, 0x277E)
+        self.assertEqual(cfg.inverter_control.telemetry_input_count, 28)
+
+    def test_inverter_control_loads_when_present(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump(
+                {
+                    "inverter_control": {
+                        "enabled": True,
+                        "poll_interval_seconds": 15,
+                    }
+                },
+                fh,
+            )
+            path = Path(fh.name)
+        try:
+            cfg = load_config(path)
+        finally:
+            os.unlink(path)
+        self.assertTrue(cfg.inverter_control.enabled)
+        self.assertEqual(cfg.inverter_control.poll_interval_seconds, 15)
+        # Other fields fall back to their address defaults so a minimal
+        # config snippet doesn't require pasting the whole register map.
+        self.assertEqual(cfg.inverter_control.active_power_limit_address, 0xCA5A)
 
     def test_relay_falls_back_to_public_original_destination(self) -> None:
         app = FoxessLocalCloud(
@@ -600,6 +631,404 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(responses[0]["count"], 4)
         self.assertEqual(responses[0]["function_name"], "read_holding")
         self.assertEqual(session.pending_reads, {})
+
+    async def test_injected_frame_builders_round_trip_through_parser(self) -> None:
+        from foxess_local_cloud.protocol import (
+            build_modbus_read_holding,
+            build_modbus_read_input,
+            build_modbus_write_single,
+            is_injected_device,
+            is_modbus_command,
+            parse_modbus_command,
+        )
+
+        device = b"\x7f\x00\x00\x01"
+        self.assertTrue(is_injected_device(device))
+        self.assertTrue(is_injected_device(b"\xff\x00\x00\x01"))  # response echo with bit 7 set
+        self.assertFalse(is_injected_device(b"\x12\x39\x77\x0b"))  # cloud-issued
+
+        for raw, want_address, want_payload in (
+            (build_modbus_write_single(device, 0xCA5A, 100), 0xCA5A, {"value": 100}),
+            (build_modbus_read_holding(device, 0xC419, 4), 0xC419, {"count": 4}),
+            (build_modbus_read_input(device, 0x277E, 28), 0x277E, {"count": 28}),
+        ):
+            frames = extract_frames(bytearray(raw))
+            self.assertEqual(len(frames), 1)
+            frame = frames[0]
+            self.assertEqual(frame.start, b"\x7f\x7f")
+            self.assertEqual(frame.end, b"\xf7\xf7")
+            self.assertEqual(frame.func, 0xE2)
+            self.assertTrue(frame.valid_crc)
+            self.assertTrue(is_modbus_command(frame))
+            self.assertTrue(is_injected_device(frame.device))
+            pdu = parse_modbus_command(frame)
+            self.assertEqual(pdu["address"], want_address)
+            for key, value in want_payload.items():
+                self.assertEqual(pdu[key], value)
+
+    async def test_local_control_write_register_emits_frame_to_inverter(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import (
+            INJECTED_DEVICE_MARKER,
+            extract_frames,
+            is_injected_device,
+            is_modbus_command,
+            parse_modbus_command,
+        )
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+
+        session = Session(app, 1)
+        self.assertIsNotNone(session.local_control)
+
+        inverter_writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
+
+        await session.local_control.write_register(0xCA5A, 75)  # type: ignore[union-attr]
+
+        self.assertEqual(len(inverter_writer.writes), 1)
+        raw = inverter_writer.writes[0]
+        frames = extract_frames(bytearray(raw))
+        self.assertEqual(len(frames), 1)
+        frame = frames[0]
+        self.assertTrue(frame.valid_crc)
+        self.assertEqual(frame.device[0], INJECTED_DEVICE_MARKER)
+        self.assertTrue(is_injected_device(frame.device))
+        self.assertTrue(is_modbus_command(frame))
+        pdu = parse_modbus_command(frame)
+        self.assertEqual(pdu, {"slave": 1, "function": 0x06, "address": 0xCA5A, "value": 75})
+
+        write_events = [fields for event, fields in events if event == "injected_write"]
+        self.assertEqual(len(write_events), 1)
+        self.assertEqual(write_events[0]["address_hex"], "0xca5a")
+        self.assertEqual(write_events[0]["value"], 75)
+
+    async def test_local_control_read_holding_registers_pending_for_response_join(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import normalize_device
+        from foxess_local_cloud.protocol import build_modbus_read_holding, extract_frames, make_frame
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+
+        class ClosableWriter(FakeStreamWriter):
+            def close(self) -> None:
+                return None
+
+        inverter_writer = ClosableWriter()
+        session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
+
+        device = await session.local_control.read_holding(0xCA5A, 1)  # type: ignore[union-attr]
+        self.assertIsNotNone(device)
+        # Pending entry recorded under the normalized key.
+        self.assertIn(normalize_device(device), session.pending_reads)
+        self.assertEqual(session.pending_reads[normalize_device(device)], (0xCA5A, 1))
+
+        # Now simulate the inverter responding with the echoed device (bit-7 set
+        # on the first byte) and value [75]. The command_response emit should
+        # join the address back even though the response device bytes differ
+        # from the request bytes — that was the deferred correlation bug.
+        echoed_device = bytes([device[0] | 0x80]) + device[1:]
+        response_payload = bytes.fromhex("0103020 04b".replace(" ", ""))
+        response_raw = make_frame(b"\x7f\x7f", echoed_device, 0xE2, response_payload, b"\xf7\xf7")
+        response_frame = extract_frames(bytearray(response_raw))[0]
+        await session.handle_frame(response_frame, ClosableWriter(), send_bootstrap=False)  # type: ignore[arg-type]
+
+        responses = [fields for event, fields in events if event == "command_response"]
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0]["address_hex"], "0xca5a")
+        self.assertEqual(responses[0]["values"], [75])
+        self.assertEqual(session.pending_reads, {})
+
+    async def test_relay_strips_injected_responses_from_upstream_forward(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import extract_frames, make_frame
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+
+        # Two frames arriving on the same TCP read from the inverter: a regular
+        # telemetry frame (must reach FoxCloud) followed by the echoed response
+        # to our injected ActivePowerLimit read (must NOT reach FoxCloud).
+        cloud_frame = telemetry_frame()
+        injected_response_raw = make_frame(
+            b"\x7f\x7f",
+            b"\xff\x00\x00\x01",  # injected marker echoed back with bit 7 set
+            0xE2,
+            bytes.fromhex("01030200 4b".replace(" ", "")),
+            b"\xf7\xf7",
+        )
+
+        class ScriptedReader:
+            def __init__(self, chunks: list[bytes]) -> None:
+                self._chunks = chunks
+
+            async def read(self, _n: int) -> bytes:
+                if not self._chunks:
+                    return b""
+                return self._chunks.pop(0)
+
+        upstream_writer = FakeStreamWriter()
+
+        class ClosableUpstream(FakeStreamWriter):
+            def close(self) -> None:
+                return None
+
+        upstream = ClosableUpstream()
+        reader = ScriptedReader([cloud_frame + injected_response_raw])
+
+        await session.relay_client_to_upstream(reader, upstream)  # type: ignore[arg-type]
+
+        forwarded = b"".join(upstream.writes)
+        self.assertIn(cloud_frame, forwarded, "cloud-bound telemetry frame must be forwarded intact")
+        self.assertNotIn(injected_response_raw, forwarded, "injected-response bytes must be stripped from upstream forward")
+
+        filtered_events = [fields for event, fields in events if event == "injected_response_filtered"]
+        self.assertEqual(len(filtered_events), 1)
+        self.assertEqual(filtered_events[0]["bytes"], len(injected_response_raw))
+
+    async def test_poll_once_injects_read_input_for_telemetry_block(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import extract_frames, parse_modbus_command
+
+        app = FoxessLocalCloud(
+            AppConfig(inverter_control=InverterControl(enabled=True, poll_interval_seconds=30))
+        )
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        inverter_writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
+
+        await session._poll_once()  # type: ignore[attr-defined]
+
+        self.assertEqual(len(inverter_writer.writes), 1)
+        frames = extract_frames(bytearray(inverter_writer.writes[0]))
+        self.assertEqual(len(frames), 1)
+        pdu = parse_modbus_command(frames[0])
+        self.assertEqual(pdu, {"slave": 1, "function": 0x04, "address": 0x277E, "count": 28})
+
+    async def test_poll_loop_not_started_when_inverter_control_disabled(self) -> None:
+        # Default config has inverter_control disabled — no LocalControl, no poll task.
+        app = FoxessLocalCloud(AppConfig())
+        session = Session(app, 1)
+        self.assertIsNone(session.local_control)
+        self.assertIsNone(session._start_poll_task())  # type: ignore[attr-defined]
+
+    async def test_poll_loop_starts_and_cancels_cleanly(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(
+            AppConfig(inverter_control=InverterControl(enabled=True, poll_interval_seconds=30))
+        )
+        session = Session(app, 1)
+        inverter_writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
+
+        task = session._start_poll_task()  # type: ignore[attr-defined]
+        self.assertIsNotNone(task)
+        # The loop sleeps for poll_interval first, so cancelling immediately
+        # exits via CancelledError without injecting anything.
+        await session._cancel_poll_task(task)  # type: ignore[attr-defined]
+        self.assertTrue(task.done())  # type: ignore[union-attr]
+        self.assertEqual(inverter_writer.writes, [], "no read should fire when cancelled before first interval elapses")
+
+    async def test_relay_forwards_cloud_response_unchanged_when_not_ours(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import make_frame
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+
+        # Cloud-originated read request → cloud-bound response: device byte
+        # starts with 0x12 (cloud's allocation). Must pass through forward
+        # unchanged so FoxCloud's transaction completes.
+        cloud_response_raw = make_frame(
+            b"\x7f\x7f",
+            b"\x92\x39\x77\x0b",
+            0xE2,
+            bytes.fromhex("01030200 4b".replace(" ", "")),
+            b"\xf7\xf7",
+        )
+
+        class ScriptedReader:
+            def __init__(self, chunks: list[bytes]) -> None:
+                self._chunks = chunks
+
+            async def read(self, _n: int) -> bytes:
+                if not self._chunks:
+                    return b""
+                return self._chunks.pop(0)
+
+        class ClosableUpstream(FakeStreamWriter):
+            def close(self) -> None:
+                return None
+
+        upstream = ClosableUpstream()
+        await session.relay_client_to_upstream(ScriptedReader([cloud_response_raw]), upstream)  # type: ignore[arg-type]
+
+        forwarded = b"".join(upstream.writes)
+        self.assertEqual(forwarded, cloud_response_raw, "cloud's own response must pass through verbatim")
+        filtered = [e for e in events if e[0] == "injected_response_filtered"]
+        self.assertEqual(filtered, [], "no injection filter should fire for a cloud-originated response")
+
+    def test_mqtt_active_power_limit_handler_dispatches_valid_payload(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {},
+            emit=lambda event, **fields: events.append((event, fields)),
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+
+        received: list[int] = []
+        publisher.register_active_power_limit_handler(TEST_SERIAL, lambda v: received.append(v))
+
+        # Simulate paho delivering a message on the command topic
+        class Msg:
+            topic = publisher.active_power_limit_command_topic(TEST_SERIAL)
+            payload = b"75"
+
+        publisher._on_message(client, None, Msg())
+        self.assertEqual(received, [75])
+
+    def test_mqtt_active_power_limit_handler_rejects_invalid_payloads(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {},
+            emit=lambda event, **fields: events.append((event, fields)),
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+
+        received: list[int] = []
+        publisher.register_active_power_limit_handler(TEST_SERIAL, lambda v: received.append(v))
+
+        topic = publisher.active_power_limit_command_topic(TEST_SERIAL)
+
+        for payload, reason in (
+            (b"not-a-number", "not_int"),
+            (b"-1", "out_of_range"),
+            (b"101", "out_of_range"),
+        ):
+
+            class Msg:
+                pass
+
+            Msg.topic = topic
+            Msg.payload = payload
+            publisher._on_message(client, None, Msg())
+
+        self.assertEqual(received, [], "handler must not receive invalid values")
+        invalid_events = [fields for event, fields in events if event == "mqtt_command_invalid"]
+        self.assertEqual(len(invalid_events), 3)
+        self.assertEqual([e["reason"] for e in invalid_events], ["not_int", "out_of_range", "out_of_range"])
+
+    def test_mqtt_subscribes_command_topics_on_connect(self) -> None:
+        client = FakeMqttClient()
+        subscribed: list[str] = []
+        client.subscribe = lambda topic: subscribed.append(topic)  # type: ignore[method-assign]
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {},
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+        publisher.register_active_power_limit_handler(TEST_SERIAL, lambda _v: None)
+        # Subscribe is called immediately because client exists
+        self.assertEqual(subscribed, [publisher.active_power_limit_command_topic(TEST_SERIAL)])
+
+        # And re-subscribed on (re)connect
+        subscribed.clear()
+        publisher._on_connect(client, None, None, 0)
+        self.assertIn(publisher.active_power_limit_command_topic(TEST_SERIAL), subscribed)
+
+    def test_mqtt_publishes_active_power_limit_discovery_and_state(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {TEST_SERIAL: "TestInverter"},
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+        publisher.publish_active_power_limit_discovery(TEST_SERIAL)
+        publisher.publish_active_power_limit_state(TEST_SERIAL, 99)
+
+        topics = {topic: payload for topic, payload, _retain in client.published}
+        discovery_topic = f"homeassistant/number/foxess_{TEST_SERIAL}/active_power_limit/config"
+        state_topic = publisher.active_power_limit_state_topic(TEST_SERIAL)
+        self.assertIn(discovery_topic, topics)
+        self.assertIn(state_topic, topics)
+
+        discovery_payload = json.loads(topics[discovery_topic])
+        self.assertEqual(discovery_payload["min"], 0)
+        self.assertEqual(discovery_payload["max"], 100)
+        self.assertEqual(discovery_payload["step"], 1)
+        self.assertEqual(discovery_payload["unit_of_measurement"], "%")
+        self.assertEqual(discovery_payload["command_topic"], publisher.active_power_limit_command_topic(TEST_SERIAL))
+        self.assertEqual(discovery_payload["state_topic"], state_topic)
+        self.assertEqual(topics[state_topic], "99")
+
+    async def test_session_publishes_active_power_limit_state_on_read_response(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import normalize_device
+        from foxess_local_cloud.protocol import build_modbus_read_holding, extract_frames, make_frame
+
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(
+            AppConfig(
+                mqtt=MqttConfig(host="mqtt.local"),
+                inverter_control=InverterControl(enabled=True),
+            )
+        )
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+
+        class ClosableWriter(FakeStreamWriter):
+            def close(self) -> None:
+                return None
+
+        session.local_control.attach_inverter_writer(ClosableWriter())  # type: ignore[union-attr]
+        device = await session.local_control.read_holding(0xCA5A, 1)  # type: ignore[union-attr]
+        echoed = bytes([device[0] | 0x80]) + device[1:]
+        response = make_frame(
+            b"\x7f\x7f",
+            echoed,
+            0xE2,
+            bytes.fromhex("01030200 4b".replace(" ", "")),  # response value 0x004b = 75
+            b"\xf7\xf7",
+        )
+        response_frame = extract_frames(bytearray(response))[0]
+
+        await session.handle_frame(response_frame, ClosableWriter(), send_bootstrap=False)  # type: ignore[arg-type]
+
+        state_topic = app.mqtt.active_power_limit_state_topic(TEST_SERIAL)
+        state_publishes = [(topic, payload) for topic, payload, _retain in client.published if topic == state_topic]
+        self.assertEqual(state_publishes, [(state_topic, "75")])
+
+    def test_mqtt_active_power_limit_discovery_idempotent_per_serial(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(MqttConfig(host="mqtt.local"), {}, client_factory=lambda: client)
+        publisher.connect()
+        publisher.publish_active_power_limit_discovery(TEST_SERIAL)
+        first = len(client.published)
+        publisher.publish_active_power_limit_discovery(TEST_SERIAL)
+        self.assertEqual(len(client.published), first, "second call must not re-publish discovery")
 
     async def test_command_frame_ignores_non_modbus_7f_frames(self) -> None:
         from foxess_local_cloud.protocol import is_modbus_command
@@ -888,6 +1317,60 @@ class MqttPublisherTest(unittest.TestCase):
 
 
 class InstallerTest(unittest.TestCase):
+    def test_pi_installer_inverter_control_disabled_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [
+                    str(ROOT / "installer/install_pi_zero_gateway.sh"),
+                    "--dry-run",
+                    "--preview-dir",
+                    tmpdir,
+                    "--skip-app-copy",
+                    "--non-interactive",
+                    "--ap-passphrase",
+                    "testpass123",
+                    "--mqtt-host",
+                    "mqtt.local",
+                ],
+                cwd=ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                env={**os.environ, "FOXESS_EXISTING_CONFIG": "/nonexistent"},
+            )
+            cfg = load_config(Path(tmpdir) / "etc/foxess-local-cloud/config.json")
+            self.assertFalse(cfg.inverter_control.enabled)
+            self.assertEqual(cfg.inverter_control.poll_interval_seconds, 30)
+
+    def test_pi_installer_inverter_control_enabled_via_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [
+                    str(ROOT / "installer/install_pi_zero_gateway.sh"),
+                    "--dry-run",
+                    "--preview-dir",
+                    tmpdir,
+                    "--skip-app-copy",
+                    "--non-interactive",
+                    "--ap-passphrase",
+                    "testpass123",
+                    "--mqtt-host",
+                    "mqtt.local",
+                    "--enable-inverter-control",
+                    "--inverter-control-poll-interval",
+                    "15",
+                ],
+                cwd=ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                env={**os.environ, "FOXESS_EXISTING_CONFIG": "/nonexistent"},
+            )
+            self.assertIn("Inverter control: enabled", result.stdout)
+            cfg = load_config(Path(tmpdir) / "etc/foxess-local-cloud/config.json")
+            self.assertTrue(cfg.inverter_control.enabled)
+            self.assertEqual(cfg.inverter_control.poll_interval_seconds, 15)
+
     def test_pi_installer_dry_run_renders_valid_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = subprocess.run(
@@ -1132,8 +1615,8 @@ class InstallerTest(unittest.TestCase):
                             "password": "secret",
                         },
                         "devices": {
-                            "60TESTSERIAL0001": "PrivateAlias1",
-                            "60TESTSERIAL000": "PrivateAlias",
+                            "60TESTSERIAL00A": "FirstInverter",
+                            "60TESTSERIAL00B": "SecondInverter",
                         },
                     }
                 ),
@@ -1168,8 +1651,8 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(
                 cfg.devices,
                 {
-                    "60TESTSERIAL0001": "PrivateAlias1",
-                    "60TESTSERIAL000": "PrivateAlias",
+                    "60TESTSERIAL00A": "FirstInverter",
+                    "60TESTSERIAL00B": "SecondInverter",
                 },
             )
 
