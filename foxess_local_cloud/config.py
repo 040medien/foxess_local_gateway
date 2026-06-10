@@ -24,28 +24,6 @@ class MqttConfig:
 
 
 @dataclass(frozen=True)
-class InverterControl:
-    """Opt-in local Modbus control of the inverter.
-
-    When enabled, the daemon may inject its own Modbus requests into the
-    inverter-bound TCP stream (writes to ``ActivePowerLimit`` driven by MQTT,
-    plus periodic reads of the input-register telemetry block). Responses to
-    our own injected requests are decoded locally and stripped from the
-    upstream-bound bytes so they never reach the FoxESS cloud.
-    """
-
-    enabled: bool = False
-    poll_interval_seconds: int = 30
-    # Holding-register address of the ActivePowerLimit setting (slave 1, value
-    # in whole percent, mapped 2026-06-09).
-    active_power_limit_address: int = 0xCA5A
-    # Input-register block carrying live telemetry. Read with Modbus function
-    # 0x04 (the cloud uses this same block for its dashboard).
-    telemetry_input_address: int = 0x277E
-    telemetry_input_count: int = 28
-
-
-@dataclass(frozen=True)
 class AppConfig:
     host: str = "0.0.0.0"
     port: int = 14431
@@ -57,7 +35,6 @@ class AppConfig:
     mqtt: MqttConfig = field(default_factory=MqttConfig)
     publish_min_interval_seconds: float = 0.0
     relay: RelayConfig = field(default_factory=lambda: RelayConfig())
-    inverter_control: InverterControl = field(default_factory=InverterControl)
 
 
 @dataclass(frozen=True)
@@ -90,7 +67,6 @@ def load_config(path: Path | None) -> AppConfig:
     raw = _load_raw(path)
     mqtt_raw = raw.get("mqtt", {}) or {}
     relay_raw = raw.get("relay", {}) or {}
-    control_raw = raw.get("inverter_control", {}) or {}
     upstreams: dict[str, tuple[str, int]] = {}
     for original, target in (relay_raw.get("upstreams", {}) or {}).items():
         host, port = str(target).rsplit(":", 1)
@@ -123,13 +99,6 @@ def load_config(path: Path | None) -> AppConfig:
             fallback_to_original_destination=bool(relay_raw.get("fallback_to_original_destination", True)),
             connect_timeout_seconds=float(relay_raw.get("connect_timeout_seconds", 10.0)),
             skip_cert_verify=bool(relay_raw.get("skip_cert_verify", False)),
-        ),
-        inverter_control=InverterControl(
-            enabled=bool(control_raw.get("enabled", False)),
-            poll_interval_seconds=int(control_raw.get("poll_interval_seconds", 30)),
-            active_power_limit_address=int(control_raw.get("active_power_limit_address", 0xCA5A)),
-            telemetry_input_address=int(control_raw.get("telemetry_input_address", 0x277E)),
-            telemetry_input_count=int(control_raw.get("telemetry_input_count", 28)),
         ),
     )
 

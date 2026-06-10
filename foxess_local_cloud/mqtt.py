@@ -30,11 +30,6 @@ class MqttPublisher:
         self.announced: set[str] = set()
         self.model_by_serial: dict[str, str] = {}
         self.device_signature_by_serial: dict[str, tuple[str, str, str]] = {}
-        # topic -> handler(topic, payload_str). Used to route incoming
-        # command messages (e.g. ActivePowerLimit setpoints from HA) back to
-        # the Session that owns the inverter.
-        self._command_handlers: dict[str, Callable[[str, str], None]] = {}
-        self._active_power_limit_announced: set[str] = set()
 
     @property
     def enabled(self) -> bool:
@@ -47,7 +42,6 @@ class MqttPublisher:
         self.client = self.client_factory() if self.client_factory else self._default_client()
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
-        self.client.on_message = self._on_message
         if hasattr(self.client, "reconnect_delay_set"):
             self.client.reconnect_delay_set(min_delay=1, max_delay=self.config.reconnect_max_delay_seconds)
         if self.config.username:
@@ -74,36 +68,10 @@ class MqttPublisher:
         self.emit(event, host=self.config.host, port=self.config.port, reason=str(reason_code))
         if event == "mqtt_connected" and self.client is not None:
             self._publish(f"{self.config.topic_prefix}/status", "online", retain=True)
-            # Re-subscribe to all registered command topics after a (re)connect.
-            for topic in self._command_handlers:
-                try:
-                    self.client.subscribe(topic)
-                except Exception as exc:
-                    self.emit("mqtt_subscribe_error", topic=topic, error=str(exc))
 
     def _on_disconnect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         self.announced.clear()
-        self._active_power_limit_announced.clear()
         self.emit("mqtt_disconnected", host=self.config.host, port=self.config.port, reason=str(reason_code))
-
-    def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
-        """paho callback. Runs on the MQTT loop thread — handler is
-        responsible for any cross-thread scheduling onto an event loop."""
-        topic = getattr(message, "topic", "")
-        payload_bytes = getattr(message, "payload", b"")
-        try:
-            payload_str = payload_bytes.decode("utf-8") if isinstance(payload_bytes, (bytes, bytearray)) else str(payload_bytes)
-        except UnicodeDecodeError:
-            self.emit("mqtt_command_decode_error", topic=topic)
-            return
-        handler = self._command_handlers.get(topic)
-        if handler is None:
-            self.emit("mqtt_command_unhandled", topic=topic)
-            return
-        try:
-            handler(topic, payload_str)
-        except Exception as exc:
-            self.emit("mqtt_command_handler_error", topic=topic, error=str(exc))
 
     def close(self) -> None:
         if self.client is not None:
@@ -112,44 +80,6 @@ class MqttPublisher:
                 self.client.disconnect()
             except Exception as exc:
                 self.emit("mqtt_close_error", error=str(exc))
-
-    def active_power_limit_command_topic(self, serial: str) -> str:
-        return f"{self.config.topic_prefix}/{serial}/active_power_limit/set"
-
-    def active_power_limit_state_topic(self, serial: str) -> str:
-        return f"{self.config.topic_prefix}/{serial}/active_power_limit/state"
-
-    def register_active_power_limit_handler(
-        self, serial: str, handler: Callable[[int], None]
-    ) -> None:
-        """Register a callback that fires when HA writes a new ActivePowerLimit
-        setpoint. The handler receives the validated integer percent (0..100).
-        Invalid payloads are rejected before the handler is called."""
-        topic = self.active_power_limit_command_topic(serial)
-
-        def _dispatch(_topic: str, payload: str) -> None:
-            try:
-                value = int(payload.strip())
-            except ValueError:
-                self.emit("mqtt_command_invalid", topic=topic, payload=payload, reason="not_int")
-                return
-            if not 0 <= value <= 100:
-                self.emit("mqtt_command_invalid", topic=topic, payload=payload, reason="out_of_range")
-                return
-            handler(value)
-
-        self._command_handlers[topic] = _dispatch
-        if self.enabled and self.client is not None:
-            try:
-                self.client.subscribe(topic)
-            except Exception as exc:
-                self.emit("mqtt_subscribe_error", topic=topic, error=str(exc))
-
-    def publish_active_power_limit_state(self, serial: str, value: int) -> None:
-        if not self.enabled or self.client is None or not serial:
-            return
-        topic = self.active_power_limit_state_topic(serial)
-        self._publish(topic, str(value), retain=self.config.retain)
 
     def publish(self, telemetry: Telemetry) -> None:
         if not self.enabled or self.client is None or not telemetry.serial:
@@ -301,44 +231,6 @@ class MqttPublisher:
             **common,
         }
         self._publish(ts_config_topic, json.dumps(ts_payload, separators=(",", ":")), retain=True)
-
-    def publish_active_power_limit_discovery(self, serial: str) -> None:
-        """Announce the writable ActivePowerLimit slider to Home Assistant.
-
-        Idempotent per serial — discovery is published once until the broker
-        disconnects (which clears the per-serial dedup set so HA gets a fresh
-        announcement on reconnect)."""
-        if not self.enabled or self.client is None or not serial:
-            return
-        if serial in self._active_power_limit_announced:
-            return
-        name = self.device_names.get(serial, serial)
-        model = self.model_by_serial.get(serial, "FoxESS inverter")
-        device: dict[str, Any] = {
-            "identifiers": [f"foxess_{serial}"],
-            "name": name,
-            "manufacturer": "FoxESS",
-            "model": model,
-        }
-        config_topic = f"{self.config.discovery_prefix}/number/foxess_{serial}/active_power_limit/config"
-        payload: dict[str, Any] = {
-            "name": "Active Power Limit",
-            "unique_id": f"foxess_{serial}_active_power_limit",
-            "object_id": f"foxess_{serial}_active_power_limit",
-            "command_topic": self.active_power_limit_command_topic(serial),
-            "state_topic": self.active_power_limit_state_topic(serial),
-            "min": 0,
-            "max": 100,
-            "step": 1,
-            "mode": "slider",
-            "unit_of_measurement": "%",
-            "entity_category": "config",
-            "availability": self._availability_block(serial),
-            "availability_mode": "all",
-            "device": device,
-        }
-        self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
-        self._active_power_limit_announced.add(serial)
 
     def _publish_mesh_discovery(self, telemetry: Telemetry, device: dict[str, Any], state_topic: str) -> None:
         serial = telemetry.serial
