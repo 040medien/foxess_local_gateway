@@ -402,32 +402,20 @@ class LocalCloudProtocolTest(unittest.TestCase):
     def test_inverter_control_defaults_to_disabled(self) -> None:
         cfg = load_config(ROOT / "local-cloud.example.json")
         self.assertFalse(cfg.inverter_control.enabled)
-        # Sensible defaults even when section omitted entirely.
-        self.assertEqual(cfg.inverter_control.poll_interval_seconds, 30)
+        # Default register address matches the live-mapped ActivePowerLimit.
         self.assertEqual(cfg.inverter_control.active_power_limit_address, 0xCA5A)
-        self.assertEqual(cfg.inverter_control.telemetry_input_address, 0x277E)
-        self.assertEqual(cfg.inverter_control.telemetry_input_count, 28)
 
     def test_inverter_control_loads_when_present(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
-            json.dump(
-                {
-                    "inverter_control": {
-                        "enabled": True,
-                        "poll_interval_seconds": 15,
-                    }
-                },
-                fh,
-            )
+            json.dump({"inverter_control": {"enabled": True}}, fh)
             path = Path(fh.name)
         try:
             cfg = load_config(path)
         finally:
             os.unlink(path)
         self.assertTrue(cfg.inverter_control.enabled)
-        self.assertEqual(cfg.inverter_control.poll_interval_seconds, 15)
-        # Other fields fall back to their address defaults so a minimal
-        # config snippet doesn't require pasting the whole register map.
+        # Address falls back to its default so a minimal config snippet
+        # doesn't have to repeat hardware-derived constants.
         self.assertEqual(cfg.inverter_control.active_power_limit_address, 0xCA5A)
 
     def test_relay_falls_back_to_public_original_destination(self) -> None:
@@ -863,51 +851,11 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(filtered_events), 1)
         self.assertEqual(filtered_events[0]["bytes"], len(injected_response_raw))
 
-    async def test_poll_once_injects_read_input_for_telemetry_block(self) -> None:
-        from foxess_local_cloud.config import InverterControl
-        from foxess_local_cloud.protocol import extract_frames, parse_modbus_command
-
-        app = FoxessLocalCloud(
-            AppConfig(inverter_control=InverterControl(enabled=True, poll_interval_seconds=30))
-        )
-        events: list[tuple[str, dict[str, object]]] = []
-        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
-        session = Session(app, 1)
-        inverter_writer = FakeStreamWriter()
-        session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
-
-        await session._poll_once()  # type: ignore[attr-defined]
-
-        self.assertEqual(len(inverter_writer.writes), 1)
-        frames = extract_frames(bytearray(inverter_writer.writes[0]))
-        self.assertEqual(len(frames), 1)
-        pdu = parse_modbus_command(frames[0])
-        self.assertEqual(pdu, {"slave": 1, "function": 0x04, "address": 0x277E, "count": 28})
-
-    async def test_poll_loop_not_started_when_inverter_control_disabled(self) -> None:
-        # Default config has inverter_control disabled — no LocalControl, no poll task.
+    async def test_local_control_not_constructed_when_inverter_control_disabled(self) -> None:
+        # Default config has inverter_control disabled — no LocalControl at all.
         app = FoxessLocalCloud(AppConfig())
         session = Session(app, 1)
         self.assertIsNone(session.local_control)
-        self.assertIsNone(session._start_poll_task())  # type: ignore[attr-defined]
-
-    async def test_poll_loop_starts_and_cancels_cleanly(self) -> None:
-        from foxess_local_cloud.config import InverterControl
-
-        app = FoxessLocalCloud(
-            AppConfig(inverter_control=InverterControl(enabled=True, poll_interval_seconds=30))
-        )
-        session = Session(app, 1)
-        inverter_writer = FakeStreamWriter()
-        session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
-
-        task = session._start_poll_task()  # type: ignore[attr-defined]
-        self.assertIsNotNone(task)
-        # The loop sleeps for poll_interval first, so cancelling immediately
-        # exits via CancelledError without injecting anything.
-        await session._cancel_poll_task(task)  # type: ignore[attr-defined]
-        self.assertTrue(task.done())  # type: ignore[union-attr]
-        self.assertEqual(inverter_writer.writes, [], "no read should fire when cancelled before first interval elapses")
 
     async def test_relay_forwards_cloud_response_unchanged_when_not_ours(self) -> None:
         from foxess_local_cloud.config import InverterControl
@@ -1090,88 +1038,6 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         state_topic = app.mqtt.active_power_limit_state_topic(TEST_SERIAL)
         state_publishes = [(topic, payload) for topic, payload, _retain in client.published if topic == state_topic]
         self.assertEqual(state_publishes, [(state_topic, "75")])
-
-    def test_mqtt_input_register_snapshot_publishes_state_and_discovery(self) -> None:
-        client = FakeMqttClient()
-        publisher = MqttPublisher(
-            MqttConfig(host="mqtt.local"),
-            {TEST_SERIAL: "Roof"},
-            client_factory=lambda: client,
-        )
-        publisher.connect()
-        values = [86, 16212, 16212, 16212, 57890, 12158, 40763, 61960, 59220, 33447,
-                  128, 12, 59220, 33511, 2561, 123, 33343, 56650, 34632, 1152,
-                  58751, 32530, 154, 3042, 6]
-        publisher.publish_input_register_snapshot(TEST_SERIAL, values)
-
-        state_topic = publisher.input_register_state_topic(TEST_SERIAL)
-        topics = {topic: payload for topic, payload, _retain in client.published}
-        self.assertIn(state_topic, topics)
-        self.assertEqual(json.loads(topics[state_topic])["values"], values)
-
-        # 25 discovery topics — one per register position, all set
-        # entity_category=diagnostic and enabled_by_default=False so they
-        # don't clutter the user's default HA view.
-        discovery_topics = [
-            t for t in topics
-            if t.startswith(f"homeassistant/sensor/foxess_{TEST_SERIAL}/input_reg_")
-        ]
-        self.assertEqual(len(discovery_topics), 25)
-        sample = json.loads(topics[f"homeassistant/sensor/foxess_{TEST_SERIAL}/input_reg_00/config"])
-        self.assertEqual(sample["state_topic"], state_topic)
-        self.assertEqual(sample["entity_category"], "diagnostic")
-        self.assertFalse(sample["enabled_by_default"])
-        self.assertEqual(sample["value_template"], "{{ value_json.values[0] }}")
-
-    def test_mqtt_input_register_discovery_idempotent_per_serial(self) -> None:
-        client = FakeMqttClient()
-        publisher = MqttPublisher(MqttConfig(host="mqtt.local"), {}, client_factory=lambda: client)
-        publisher.connect()
-        values = list(range(25))
-        publisher.publish_input_register_snapshot(TEST_SERIAL, values)
-        first_count = len(client.published)
-        publisher.publish_input_register_snapshot(TEST_SERIAL, values)
-        # Second call publishes state but NOT another 25 discovery topics
-        self.assertEqual(len(client.published), first_count + 1)
-
-    async def test_session_publishes_input_register_snapshot_from_poll_response(self) -> None:
-        from foxess_local_cloud.config import InverterControl
-        from foxess_local_cloud.protocol import extract_frames, make_frame
-
-        client = FakeMqttClient()
-        app = FoxessLocalCloud(
-            AppConfig(
-                mqtt=MqttConfig(host="mqtt.local"),
-                inverter_control=InverterControl(enabled=True),
-            )
-        )
-        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
-        app.mqtt.connect()
-
-        session = Session(app, 1)
-        session.serial = TEST_SERIAL
-
-        class ClosableWriter(FakeStreamWriter):
-            def close(self) -> None:
-                return None
-
-        session.local_control.attach_inverter_writer(ClosableWriter())  # type: ignore[union-attr]
-        device = await session.local_control.read_input(0x277E, 28)  # type: ignore[union-attr]
-        # Synthesise a 28-register read-input response (last 3 u16 = echo of
-        # the request bytes, per inverter convention).
-        u16s = list(range(1, 26)) + [0x0104, 0x277E, 0x001C]
-        body = b"".join(v.to_bytes(2, "big") for v in u16s)
-        response_payload = bytes([0x01, 0x04, 56]) + body
-        echoed_device = bytes([device[0] | 0x80]) + device[1:]
-        response_raw = make_frame(b"\x7f\x7f", echoed_device, 0xE2, response_payload, b"\xf7\xf7")
-        response_frame = extract_frames(bytearray(response_raw))[0]
-
-        await session.handle_frame(response_frame, ClosableWriter(), send_bootstrap=False)  # type: ignore[arg-type]
-
-        state_topic = app.mqtt.input_register_state_topic(TEST_SERIAL)
-        state_publishes = [json.loads(payload) for topic, payload, _r in client.published if topic == state_topic]
-        self.assertEqual(len(state_publishes), 1)
-        self.assertEqual(state_publishes[0]["values"], list(range(1, 26)))
 
     def test_mqtt_active_power_limit_discovery_idempotent_per_serial(self) -> None:
         client = FakeMqttClient()
@@ -1492,7 +1358,6 @@ class InstallerTest(unittest.TestCase):
             )
             cfg = load_config(Path(tmpdir) / "etc/foxess-local-cloud/config.json")
             self.assertFalse(cfg.inverter_control.enabled)
-            self.assertEqual(cfg.inverter_control.poll_interval_seconds, 30)
 
     def test_pi_installer_inverter_control_enabled_via_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1509,8 +1374,6 @@ class InstallerTest(unittest.TestCase):
                     "--mqtt-host",
                     "mqtt.local",
                     "--enable-inverter-control",
-                    "--inverter-control-poll-interval",
-                    "15",
                 ],
                 cwd=ROOT,
                 check=True,
@@ -1521,7 +1384,6 @@ class InstallerTest(unittest.TestCase):
             self.assertIn("Inverter control: enabled", result.stdout)
             cfg = load_config(Path(tmpdir) / "etc/foxess-local-cloud/config.json")
             self.assertTrue(cfg.inverter_control.enabled)
-            self.assertEqual(cfg.inverter_control.poll_interval_seconds, 15)
 
     def test_pi_installer_dry_run_renders_valid_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

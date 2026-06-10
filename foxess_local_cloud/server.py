@@ -22,8 +22,6 @@ from .protocol import (
     Frame,
     ascii_text,
     extract_frames,
-    build_modbus_read_holding,
-    build_modbus_read_input,
     build_modbus_write_single,
     is_mesh_follower_frame,
     is_mesh_root_frame,
@@ -191,6 +189,10 @@ class Session:
         publisher.register_active_power_limit_handler(self.serial, _on_setpoint)
         publisher.publish_active_power_limit_discovery(self.serial)
         self._inverter_control_command_registered = True
+        # Fire a one-shot read of the current ActivePowerLimit so HA has a
+        # real state value from the start instead of "unknown". The response
+        # flows through the existing command_response handler.
+        asyncio.create_task(self._read_active_power_limit_once())
 
     async def _handle_active_power_limit_setpoint(self, percent: int) -> None:
         if self.local_control is None or not self.serial:
@@ -212,6 +214,24 @@ class Session:
         # it if the inverter clamped/rejected the value.
         self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
 
+    async def _read_active_power_limit_once(self) -> None:
+        """Inject a one-shot read of the ActivePowerLimit register so HA can
+        show the current setpoint as soon as the inverter is reachable. The
+        response flows through the normal command_response handler, which
+        publishes state via ``publish_active_power_limit_state``."""
+        if self.local_control is None or not self.serial:
+            return
+        address = self.app.config.inverter_control.active_power_limit_address
+        try:
+            await self.local_control.read_holding(address, 1)
+        except Exception as exc:
+            self.app.logger.emit(
+                "active_power_limit_read_error",
+                session=self.session_id,
+                serial=self.serial,
+                error=str(exc),
+            )
+
     async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self.app.config.relay.enabled:
             await self.run_relay(reader, writer)
@@ -221,17 +241,13 @@ class Session:
     async def run_local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self.local_control is not None:
             self.local_control.attach_inverter_writer(writer)
-        poll_task = self._start_poll_task()
-        try:
-            while True:
-                data = await reader.read(4096)
-                if not data:
-                    return
-                self.buffer.extend(data)
-                for frame in extract_frames(self.buffer):
-                    await self.handle_frame(frame, writer)
-        finally:
-            await self._cancel_poll_task(poll_task)
+        while True:
+            data = await reader.read(4096)
+            if not data:
+                return
+            self.buffer.extend(data)
+            for frame in extract_frames(self.buffer):
+                await self.handle_frame(frame, writer)
 
     async def run_relay(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         original_ip = original_destination_ip(writer)
@@ -288,51 +304,10 @@ class Session:
         self.app.logger.emit("relay_connected", session=self.session_id, upstream_host=upstream_host, upstream_port=upstream_port)
         if self.local_control is not None:
             self.local_control.attach_inverter_writer(writer)
-        poll_task = self._start_poll_task()
-        try:
-            await asyncio.gather(
-                self.relay_client_to_upstream(reader, upstream_writer),
-                self.relay_upstream_to_client(upstream_reader, writer),
-            )
-        finally:
-            await self._cancel_poll_task(poll_task)
-
-    def _start_poll_task(self) -> asyncio.Task[None] | None:
-        if self.local_control is None or self.app.config.inverter_control.poll_interval_seconds <= 0:
-            return None
-        return asyncio.create_task(self._poll_loop())
-
-    async def _cancel_poll_task(self, task: asyncio.Task[None] | None) -> None:
-        if task is None or task.done():
-            return
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-    async def _poll_loop(self) -> None:
-        cfg = self.app.config.inverter_control
-        interval = cfg.poll_interval_seconds
-        # Initial delay so we don't fire a Modbus read before the inverter
-        # has finished its registration handshake on a fresh session.
-        await asyncio.sleep(interval)
-        while True:
-            try:
-                await self._poll_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self.app.logger.emit("inverter_control_poll_error", session=self.session_id, error=str(exc))
-            await asyncio.sleep(interval)
-
-    async def _poll_once(self) -> None:
-        """One iteration of the poll loop. Separate method so tests can
-        exercise the read injection without driving the timed loop."""
-        if self.local_control is None:
-            return
-        cfg = self.app.config.inverter_control
-        await self.local_control.read_input(cfg.telemetry_input_address, cfg.telemetry_input_count)
+        await asyncio.gather(
+            self.relay_client_to_upstream(reader, upstream_writer),
+            self.relay_upstream_to_client(upstream_reader, writer),
+        )
 
     def choose_upstream(self, original_ip: str | None) -> tuple[str, int] | None:
         upstreams = self.app.config.relay.upstreams
@@ -525,20 +500,6 @@ class Session:
                 and pdu["values"]
             ):
                 self.app.mqtt.publish_active_power_limit_state(self.serial, int(pdu["values"][0]))
-            # Input-register block (default 0x277E count 28): the last 3 u16
-            # values in the response are the request bytes echoed back, not
-            # data. Publish the first 25 to MQTT so HA can expose them as
-            # diagnostic sensors for downstream decoding work.
-            if (
-                pending
-                and self.local_control is not None
-                and self.serial
-                and pdu["function"] == 0x04
-                and pending[0] == self.app.config.inverter_control.telemetry_input_address
-                and len(pdu["values"]) >= 4
-            ):
-                data_values = pdu["values"][:-3] if len(pdu["values"]) > 3 else pdu["values"]
-                self.app.mqtt.publish_input_register_snapshot(self.serial, list(data_values))
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16

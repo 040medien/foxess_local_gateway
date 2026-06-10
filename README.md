@@ -9,20 +9,15 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
-Two features the FoxESS cloud cannot give you, available here as an opt-in:
+Headline feature the FoxESS cloud doesn't give regular users:
 
 - **Set `Active Power Limit` directly from Home Assistant.** A writable
   HA slider that drives a local Modbus write straight to the inverter —
   no FoxCloud round-trip, no installer-portal account required. Useful
   for curtailing solar during negative electricity prices (common in NL
   on sunny weekends), demand-charge avoidance, or any automation the
-  cloud's web UI can't reach.
-- **Local Modbus channel** that lets the daemon talk to the inverter
-  directly alongside the FoxESS cloud — same TCP session, different
-  transaction stream. Lays the groundwork for richer integrations
-  beyond the writable Active Power Limit. Responses to anything we
-  inject are stripped from the bytes forwarded to FoxCloud so the
-  cloud's view of the inverter stays untouched.
+  cloud's web UI can't reach. The write response is stripped from the
+  upstream stream so FoxCloud sees nothing.
 
 And the rest:
 
@@ -37,6 +32,41 @@ And the rest:
 - Works with multiple inverters connected through the Pi AP at the same time, even if they use
   their own mesh network.
 
+## What we deliberately don't expose
+
+The FoxESS installer portal also lets a certified installer change other
+Modbus-writable groups on the M1: `GridVoltageParameters` (OVP/UVP),
+`GridFreqParameters` (OFP/UFP), `PowerFreCon` (frequency derating curve),
+`ReactiveConfig` (PF / Q(U) / cosφ modes), `StartParameters`, and
+`SafetyCountry`. The local-Modbus channel here can technically write
+those too — we deliberately don't expose them. They are grid-code
+**regulatory settings**: changing OVP/UVP thresholds or country-code
+parameters can put the inverter out of conformance with EN 50549 (or
+the local equivalent), risk nuisance trips during grid faults, and
+void the connection contract you have with your DSO. The FoxESS cloud
+hides them behind an installer account for the same reason. If you
+have a real reason to touch them — e.g. a DSO request to enable
+`Q(U)mode` for over-voltage suppression — do it through your
+installer via the official portal, not through this gateway.
+
+`Active Power Limit` is the exception: it is a non-safety setpoint
+that's expected to change during normal operation (curtailment for
+dynamic tariffs, demand-charge avoidance), and exposing it via HA is
+the substantive win of this PR over the cloud-only path.
+
+## A note on Modbus and live telemetry
+
+We mapped the inverter's full Modbus surface (input + holding registers
+across the 16-bit address space, all standard function codes, all
+slave IDs) and confirmed there is **no register block that delivers
+live telemetry faster than the inverter's own ~90 s push frame**. The
+one input-register window the cloud reads (`0x277E`, 28 registers) is
+a slow snapshot the firmware refreshes only on inverter boot — not on
+poll, not on session reconnect, and not in response to writes. So
+polling Modbus harder than 90 s buys nothing: the values don't move.
+The push-frame decoder remains the only source of varying measurement
+data, and we use that as Home Assistant's telemetry feed.
+
 ## What This Does
 
 The Raspberry Pi runs four pieces:
@@ -45,9 +75,8 @@ The Raspberry Pi runs four pieces:
 - A narrow nftables redirect for TCP/14431 traffic from the inverter AP subnet.
 - `foxess-local-cloud`, a Python daemon that decodes the inverter's pushed
   telemetry, publishes MQTT state, and (when *Inverter Control* is enabled)
-  talks to the inverter directly to give Home Assistant faster telemetry
-  and a writable `Active Power Limit` slider — all bypassing the FoxESS
-  cloud.
+  drives the writable `Active Power Limit` slider directly over local
+  Modbus, bypassing the FoxESS cloud.
 - `foxess-ble-provision`, a Bluetooth tool that points inverters at the AP
   during setup, so the FoxESS mobile app isn't needed.
 
@@ -423,17 +452,31 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-10
 
-- **Local control of ActivePowerLimit via MQTT (opt-in).** When the
+- **Writable `Active Power Limit` via MQTT (opt-in).** When the
   installer is run with `--enable-inverter-control`, Home Assistant
-  gets a new writable `Active Power Limit` number entity (0–100 %, 1 %
+  gets a writable `Active Power Limit` Number entity (0–100 %, 1 %
   step) that goes straight to the inverter as a Modbus write — no
-  FoxESS cloud round-trip. The daemon also injects a periodic Modbus
-  read of the input-register telemetry block (cadence set by
-  `--inverter-control-poll-interval`, default 30 s) so dashboards and
-  curtailment automations get faster updates than the inverter's 90 s
-  push interval. Responses to these injected requests are stripped
-  from the upstream stream so FoxCloud sees no extra traffic. Feature
-  is disabled by default; enable per-install with the new flags.
+  FoxESS cloud round-trip and no installer account needed. The
+  daemon also reads the current value once at session start so HA
+  shows the live setpoint immediately. The write response is
+  stripped from the upstream stream so FoxCloud sees no extra
+  traffic. Disabled by default.
+- **Investigated local Modbus telemetry, deliberately not shipping
+  it.** Comprehensive Modbus probing (every standard function code,
+  all slave IDs, wide-band input + holding sweeps) confirmed the
+  inverter has only one input-register window worth reading
+  (`0x277E`, 28 registers) and that window is a slow snapshot
+  refreshed only on inverter boot — values stay constant for hours
+  across polls, writes, and session reconnects. No live-telemetry
+  block exists in the Modbus surface, so faster-than-push polling
+  isn't possible. The 90 s push frame remains the telemetry source.
+- **Other installer-portal settings (`GridVoltageParameters`,
+  `GridFreqParameters`, `PowerFreCon`, `ReactiveConfig`,
+  `StartParameters`, `SafetyCountry`) are not exposed.** Same local
+  Modbus channel could technically write them, but they're grid-code
+  regulatory settings — touching them risks EN 50549 non-conformance,
+  nuisance trips, and DSO contract issues. See *What we deliberately
+  don't expose* above for the full rationale.
 
 ### 2026-06-09
 

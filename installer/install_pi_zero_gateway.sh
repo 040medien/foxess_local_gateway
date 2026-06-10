@@ -39,8 +39,6 @@ RELAY_ENABLED=false
 RELAY_ENABLED_SET=0
 INVERTER_CONTROL_ENABLED=false
 INVERTER_CONTROL_ENABLED_SET=0
-INVERTER_CONTROL_POLL_INTERVAL=30
-INVERTER_CONTROL_POLL_INTERVAL_SET=0
 FOXESS_CLOUD_IPS="8.209.116.72 47.91.86.144"
 FOXESS_CLOUD_HOSTS="foxesscloud.com"
 
@@ -77,13 +75,11 @@ Options:
   --publish-min-interval SECONDS    Optional MQTT publish throttle
   --relay                           Enable daemon relay mode in generated config
   --no-relay                        Disable daemon relay mode even if existing config enables it
-  --enable-inverter-control         Enable local Modbus control: ActivePowerLimit
-                                    setpoint via MQTT plus periodic input-register
-                                    polling. Responses are stripped from upstream so
-                                    FoxCloud sees no extra traffic.
+  --enable-inverter-control         Enable local Modbus write of ActivePowerLimit
+                                    driven by Home Assistant. The write response is
+                                    stripped from the upstream stream so FoxCloud
+                                    sees no extra traffic.
   --disable-inverter-control        Disable inverter control even if existing config has it on
-  --inverter-control-poll-interval SECONDS
-                                    Seconds between injected telemetry polls (default 30)
   --foxess-cloud-ip IP              Add a FoxESS relay upstream hint; repeatable
   --foxess-cloud-host HOST          Resolve this host as a FoxESS relay upstream hint; repeatable
   --no-nat                          Disable NAT from inverter AP to upstream Wi-Fi
@@ -250,10 +246,6 @@ preserve_existing_inverter_control_config() {
   if [[ "$INVERTER_CONTROL_ENABLED_SET" != 1 ]]; then
     existing_value=$(existing_inverter_control_field enabled "$existing_config")
     [[ -n "$existing_value" ]] && INVERTER_CONTROL_ENABLED=$existing_value
-  fi
-  if [[ "$INVERTER_CONTROL_POLL_INTERVAL_SET" != 1 ]]; then
-    existing_value=$(existing_inverter_control_field poll_interval_seconds "$existing_config")
-    [[ -n "$existing_value" ]] && INVERTER_CONTROL_POLL_INTERVAL=$existing_value
   fi
   return 0
 }
@@ -434,7 +426,6 @@ while [[ $# -gt 0 ]]; do
     --no-relay) RELAY_ENABLED=false; RELAY_ENABLED_SET=1; shift ;;
     --enable-inverter-control) INVERTER_CONTROL_ENABLED=true; INVERTER_CONTROL_ENABLED_SET=1; shift ;;
     --disable-inverter-control) INVERTER_CONTROL_ENABLED=false; INVERTER_CONTROL_ENABLED_SET=1; shift ;;
-    --inverter-control-poll-interval) INVERTER_CONTROL_POLL_INTERVAL=${2:?}; INVERTER_CONTROL_POLL_INTERVAL_SET=1; shift 2 ;;
     --foxess-cloud-ip) FOXESS_CLOUD_IPS="$FOXESS_CLOUD_IPS ${2:?}"; shift 2 ;;
     --foxess-cloud-host) FOXESS_CLOUD_HOSTS="$FOXESS_CLOUD_HOSTS ${2:?}"; shift 2 ;;
     --no-nat) ENABLE_NAT=0; shift ;;
@@ -462,7 +453,6 @@ case "$INVERTER_CONTROL_ENABLED" in
   true|false) ;;
   *) die "--enable-inverter-control / --disable-inverter-control flag produced unexpected value: $INVERTER_CONTROL_ENABLED" ;;
 esac
-validate_json_number "inverter control poll interval" "$INVERTER_CONTROL_POLL_INTERVAL"
 
 if [[ -z "$AP_PASSPHRASE" ]]; then
   AP_PASSPHRASE=$(existing_wifi_passphrase)
@@ -496,7 +486,7 @@ export AP_SSID AP_PASSPHRASE AP_PASSPHRASE_GENERATED AP_IFACE STA_IFACE AP_ADDRE
 export AP_DHCP_START AP_DHCP_END AP_DHCP_LEASE FOXESS_CLOUD_IPS ENABLE_NAT ENABLE_REDIRECT
 export DAEMON_PORT=14431 MQTT_HOST MQTT_PORT MQTT_USERNAME_JSON MQTT_PASSWORD_JSON
 export PUBLISH_MIN_INTERVAL_SECONDS RELAY_ENABLED RELAY_UPSTREAMS_JSON DNSMASQ_ADDRESS_LINES
-export INVERTER_CONTROL_ENABLED INVERTER_CONTROL_POLL_INTERVAL
+export INVERTER_CONTROL_ENABLED
 export DEVICES_JSON
 
 if [[ "$DRY_RUN" = 1 ]]; then
@@ -551,7 +541,7 @@ echo "  Upstreams: $FOXESS_CLOUD_IPS"
 echo "  MQTT:      ${MQTT_HOST:-disabled}"
 echo "  Relay:     $RELAY_ENABLED"
 if [[ "$INVERTER_CONTROL_ENABLED" = true ]]; then
-  echo "  Inverter control: enabled (MQTT ActivePowerLimit + polling every ${INVERTER_CONTROL_POLL_INTERVAL}s)"
+  echo "  Inverter control: enabled (writable ActivePowerLimit via MQTT)"
 else
   echo "  Inverter control: disabled"
 fi

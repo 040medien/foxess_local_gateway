@@ -25,24 +25,27 @@ class MqttConfig:
 
 @dataclass(frozen=True)
 class InverterControl:
-    """Opt-in local Modbus control of the inverter.
+    """Opt-in local Modbus write channel to the inverter.
 
-    When enabled, the daemon may inject its own Modbus requests into the
-    inverter-bound TCP stream (writes to ``ActivePowerLimit`` driven by MQTT,
-    plus periodic reads of the input-register telemetry block). Responses to
-    our own injected requests are decoded locally and stripped from the
-    upstream-bound bytes so they never reach the FoxESS cloud.
+    When enabled, the daemon may write to the inverter's ActivePowerLimit
+    Modbus holding register on behalf of Home Assistant — without the
+    FoxESS cloud round-trip. Responses to our injected writes are decoded
+    locally and stripped from the upstream-bound bytes so they never reach
+    FoxCloud.
+
+    Scope is intentionally narrow. The cloud's installer portal exposes
+    several other Modbus-writable groups (grid voltage / frequency
+    protection, reactive power modes, start parameters, safety country
+    code, etc.); we do NOT expose those because they are grid-code
+    regulatory settings that should only be changed by a certified
+    installer in coordination with the DSO. See README for the full
+    rationale.
     """
 
     enabled: bool = False
-    poll_interval_seconds: int = 30
-    # Holding-register address of the ActivePowerLimit setting (slave 1, value
-    # in whole percent, mapped 2026-06-09).
+    # Holding-register address of the ActivePowerLimit setting (slave 1,
+    # value in whole percent, mapped 2026-06-09).
     active_power_limit_address: int = 0xCA5A
-    # Input-register block carrying live telemetry. Read with Modbus function
-    # 0x04 (the cloud uses this same block for its dashboard).
-    telemetry_input_address: int = 0x277E
-    telemetry_input_count: int = 28
 
 
 @dataclass(frozen=True)
@@ -126,10 +129,7 @@ def load_config(path: Path | None) -> AppConfig:
         ),
         inverter_control=InverterControl(
             enabled=bool(control_raw.get("enabled", False)),
-            poll_interval_seconds=int(control_raw.get("poll_interval_seconds", 30)),
             active_power_limit_address=int(control_raw.get("active_power_limit_address", 0xCA5A)),
-            telemetry_input_address=int(control_raw.get("telemetry_input_address", 0x277E)),
-            telemetry_input_count=int(control_raw.get("telemetry_input_count", 28)),
         ),
     )
 

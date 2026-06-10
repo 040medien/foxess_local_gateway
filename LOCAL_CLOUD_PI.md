@@ -13,23 +13,20 @@ The inverter connects to the Pi AP. TCP/14431 connections from AP clients are
 redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
-One feature in this gateway is unavailable to FoxESS cloud users: a
-writable `Active Power Limit` Home Assistant slider that drives a
-local Modbus write straight to the inverter, with no cloud round-trip.
-Off by default. See *Inverter Control (opt-in)* below for how to
-enable it and what it does on the wire.
+One feature here is unavailable to FoxESS cloud users: a writable
+`Active Power Limit` Home Assistant slider that drives a local Modbus
+write straight to the inverter, with no cloud round-trip. Off by
+default. See *Inverter Control (opt-in)* below.
 
-The same opt-in also enables a periodic injected Modbus read of the
-input-register window at `0x277E` count 28. The response carries 25
-u16 values (the last 3 are the request echoed back). The daemon
-publishes those 25 values both as raw JSON on
-`foxess_m1/<serial>/input_registers/277e/state` and as 25 individual
-diagnostic HA sensors named `Input Reg 00`..`Input Reg 24`
-(`entity_category=diagnostic`, `enabled_by_default=false` — opt-in
-per entity in the HA UI). Meanings of individual positions are not
-fully decoded yet — the inverter appears to refresh the snapshot at
-an internal interval rather than every poll, so values are static
-much of the time. The cloud receives none of the injected traffic.
+Other regulatory installer-portal settings (grid voltage/frequency
+protection, reactive power modes, country code) are deliberately
+**not** exposed — see *What we deliberately don't expose* in the
+README for the rationale. The local Modbus interface was also
+investigated as a possible live-telemetry source and found to be
+unusable for that: the only readable register block is a static
+snapshot the firmware refreshes on boot, not in response to polling.
+Live measurement data continues to flow from the inverter's native
+~90 s push frame.
 
 ## Networking Model
 
@@ -263,16 +260,14 @@ sudo ./installer/install_pi_zero_gateway.sh --no-relay
 
 ## Inverter Control (opt-in)
 
-Off by default. Enable to expose a writable `Active Power Limit` slider
-(0–100%) in Home Assistant and to inject periodic Modbus reads of the
-input-register telemetry block (faster updates than the inverter's own
-~90s push cadence). Responses to these injected requests are stripped
-from the bytes forwarded to FoxCloud, so the cloud sees no extra traffic.
+Off by default. Enable to expose a writable `Active Power Limit`
+slider (0–100 %) in Home Assistant. No periodic polling — the daemon
+reads the current value once at session start so HA shows the live
+setpoint, then writes whatever HA's slider sets and the response is
+stripped from the bytes forwarded to FoxCloud.
 
 ```bash
-sudo ./installer/install_pi_zero_gateway.sh \
-  --enable-inverter-control \
-  --inverter-control-poll-interval 30
+sudo ./installer/install_pi_zero_gateway.sh --enable-inverter-control
 ```
 
 To turn it off again:
@@ -286,23 +281,47 @@ What it does on the wire:
 - Writes to `Active Power Limit` (Modbus holding register `0xCA5A`,
   slave 1, value 0–100 in whole percent) when HA publishes to
   `foxess_m1/<serial>/active_power_limit/set`.
-- Reads `0x277E` for 28 input registers every poll interval.
-- Each injected request uses a 4-byte envelope device field starting
-  with `0x7f`, so the inverter's echoed response is recognisable as
-  ours regardless of the bit-7 toggle the inverter applies, and is
-  filtered out of the upstream forward.
+- Reads `0xCA5A` once at session start to populate the HA state.
+- Each injected request uses a 4-byte envelope device field with
+  byte[3] = `0xAA` (our self-chosen transaction-stream marker); the
+  inverter accepts it in parallel with the cloud's marker, and the
+  echoed response is filtered out of the upstream forward.
 
 Operational notes:
 
-- The inverter handles one Modbus transaction at a time. Bursty writes
-  (e.g. driving the slider rapidly) can briefly time out cloud-side
+- The inverter handles one Modbus transaction at a time. Bursty
+  writes (driving the slider rapidly) can briefly time out cloud-side
   reads — this is normal and self-corrects within a few seconds.
-- Writes change the inverter's runtime config and are persisted. Don't
-  drive the slider faster than the inverter can settle (a few seconds
-  between changes is plenty).
-- Polling more often than every ~10 seconds is unlikely to give you
-  meaningfully fresher data and increases the chance of colliding with
-  cloud-side reads.
+- Writes change the inverter's runtime config and are persisted to
+  flash. Don't drive the slider faster than the inverter can settle
+  (a few seconds between changes is plenty).
+
+### What we don't expose, and why
+
+The same local Modbus channel can technically write the FoxESS
+installer portal's other groups (`GridVoltageParameters`,
+`GridFreqParameters`, `PowerFreCon`, `ReactiveConfig`,
+`StartParameters`, `SafetyCountry`). We deliberately don't surface
+those in Home Assistant — they are regulatory grid-code settings,
+not user-changeable knobs. Editing OVP/UVP thresholds, frequency
+derating curves, or country code can put the inverter out of
+conformance with EN 50549 / VDE-AR-N 4105 / equivalent, cause
+nuisance trips, and break your DSO contract. If a real reason
+exists (e.g. DSO request to enable `Q(U)mode`), do it through
+your certified installer via the FoxESS portal.
+
+### About live telemetry over Modbus
+
+We mapped the inverter's full Modbus surface across all standard
+function codes, the entire 16-bit input + holding address space at
+multiple stride densities, and all slave IDs 1–10. Result: only one
+input-register window is readable (`0x277E`, 28 registers), and its
+values are a **static snapshot the firmware refreshes only on
+inverter boot** — not on poll, not on write, not on session
+reconnect. So polling Modbus harder than the inverter's native
+~90 s push interval doesn't give faster telemetry. The push frame
+remains the only varying source, and that's what the daemon already
+decodes into MQTT.
 
 ## Rollback
 

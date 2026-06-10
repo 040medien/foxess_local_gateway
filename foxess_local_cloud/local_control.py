@@ -26,7 +26,6 @@ from typing import Callable
 from .protocol import (
     Frame,
     build_modbus_read_holding,
-    build_modbus_read_input,
     build_modbus_write_single,
 )
 
@@ -51,13 +50,13 @@ def normalize_device(device: bytes) -> bytes:
 #   byte[0]   operation type: 0x11 for reads (Modbus fn 3/4), 0x12 for writes
 #             (Modbus fn 6/16). Inverter responds with bit 7 of this byte set.
 #   bytes[1-2] little-endian transaction-id counter, advances per request.
-#   byte[3]   session marker: chosen by the cloud once per TCP session and
-#             reused for every request on that session. The inverter rejects
-#             any request whose byte[3] doesn't match the marker established
-#             at session start (it echoes the request back as a NAK rather
-#             than executing the Modbus operation).
+#   byte[3]   session marker (any byte, but must be consistent per stream).
+#             We pick one ourselves and the inverter happily handles our
+#             stream in parallel with the cloud's.
 #
-# So injection requires observing the cloud's marker first and reusing it.
+# We only emit writes from this module (reads/polling were removed when the
+# PR was scoped down to ActivePowerLimit set), so only DEVICE_BYTE_WRITE is
+# used in practice; DEVICE_BYTE_READ is kept for documentation / future use.
 DEVICE_BYTE_READ = 0x11
 DEVICE_BYTE_WRITE = 0x12
 # Counter prefix for our injections — kept far from the cloud's observed
@@ -166,6 +165,8 @@ class LocalControl:
         return await self._send(device, frame)
 
     async def read_holding(self, address: int, count: int) -> bytes | None:
+        """Inject a Modbus read-holding-registers request. Used to read back
+        the current ActivePowerLimit setting so HA can show its state."""
         device = self._next_device(DEVICE_BYTE_READ)
         frame = build_modbus_read_holding(device, address, count)
         self._register_pending_read(normalize_device(device), address, count)
@@ -174,22 +175,6 @@ class LocalControl:
             session=self._session_id,
             device=device.hex(),
             function="read_holding",
-            address=address,
-            address_hex=f"0x{address:04x}",
-            count=count,
-        )
-        self._outstanding.add(normalize_device(device))
-        return await self._send(device, frame)
-
-    async def read_input(self, address: int, count: int) -> bytes | None:
-        device = self._next_device(DEVICE_BYTE_READ)
-        frame = build_modbus_read_input(device, address, count)
-        self._register_pending_read(normalize_device(device), address, count)
-        self._emit(
-            "injected_read",
-            session=self._session_id,
-            device=device.hex(),
-            function="read_input",
             address=address,
             address_hex=f"0x{address:04x}",
             count=count,
