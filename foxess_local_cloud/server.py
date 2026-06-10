@@ -415,6 +415,14 @@ class Session:
             pdu = parse_modbus_command(frame)
             if pdu["function"] in (0x03, 0x04):
                 self.pending_reads[normalize_device(bytes(frame.device))] = (pdu["address"], pdu["count"])
+            # Cloud-originated command frames carry the session marker in
+            # device[3]. Capture it so our injections can mimic it.
+            if (
+                self.local_control is not None
+                and not self.local_control.is_our_frame(frame)
+                and len(frame.device) >= 4
+            ):
+                self.local_control.observe_session_marker(frame.device[3])
             self.app.logger.emit(
                 "command_frame",
                 session=self.session_id,
