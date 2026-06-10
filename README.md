@@ -9,7 +9,7 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
-- Writable `Active Power Limit` slider in Home Assistant (opt-in) for
+- Writable `Active Power Limit` slider in Home Assistant for
   curtailment during negative electricity prices or demand-charge avoidance (German
   Nulleinspeisung).
 - No data leaves your network, including during initial setup — the Pi can
@@ -431,17 +431,17 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
-### 2026-06-10
+### 2026-06-11
 
-- **Writable `Active Power Limit` via MQTT (opt-in).** When the
-  installer is run with `--enable-inverter-control`, Home Assistant
-  gets a writable `Active Power Limit` Number entity (0–100 %, 1 %
-  step) that goes straight to the inverter as a Modbus write — no
-  FoxESS cloud round-trip and no installer account needed. The
-  daemon also reads the current value once at session start so HA
-  shows the live setpoint immediately. The write response is
-  stripped from the upstream stream so FoxCloud sees no extra
-  traffic. Disabled by default.
+- **Writable `Active Power Limit` via MQTT.** Home Assistant gets a
+  writable `Active Power Limit` Number entity (0–100 %, 1 % step)
+  that goes straight to the inverter as a Modbus write — no FoxESS
+  cloud round-trip and no installer account needed. The daemon also
+  reads the current value once on the first telemetry frame so HA
+  shows the live setpoint as soon as the inverter is producing. The
+  write response is stripped from the upstream stream so FoxCloud
+  sees no extra traffic. Enabled by default; pass
+  `--disable-inverter-control` to the installer to turn it off.
 - **Investigated local Modbus telemetry, deliberately not shipping
   it.** Comprehensive Modbus probing (every standard function code,
   all slave IDs, wide-band input + holding sweeps) confirmed the

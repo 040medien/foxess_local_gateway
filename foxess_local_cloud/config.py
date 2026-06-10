@@ -42,7 +42,7 @@ class InverterControl:
     rationale.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     # Holding-register address of the ActivePowerLimit setting (slave 1,
     # value in whole percent, mapped 2026-06-09).
     active_power_limit_address: int = 0xCA5A
@@ -128,7 +128,7 @@ def load_config(path: Path | None) -> AppConfig:
             skip_cert_verify=bool(relay_raw.get("skip_cert_verify", False)),
         ),
         inverter_control=InverterControl(
-            enabled=bool(control_raw.get("enabled", False)),
+            enabled=bool(control_raw.get("enabled", True)),
             active_power_limit_address=int(control_raw.get("active_power_limit_address", 0xCA5A)),
         ),
     )

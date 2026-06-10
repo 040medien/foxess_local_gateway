@@ -13,8 +13,8 @@ The inverter connects to the Pi AP. TCP/14431 connections from AP clients are
 redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
-An opt-in writable `Active Power Limit` slider for Home Assistant is
-available — see *Inverter Control (opt-in)* below.
+A writable `Active Power Limit` slider for Home Assistant is enabled
+by default — see *Inverter Control* below.
 
 ## Networking Model
 
@@ -246,22 +246,25 @@ Disable relay for fully local operation:
 sudo ./installer/install_pi_zero_gateway.sh --no-relay
 ```
 
-## Inverter Control (opt-in)
+## Inverter Control
 
-Off by default. Enable to expose a writable `Active Power Limit`
-slider (0–100 %) in Home Assistant. No periodic polling — the daemon
-reads the current value once at session start so HA shows the live
-setpoint, then writes whatever HA's slider sets and the response is
-stripped from the bytes forwarded to FoxCloud.
+Enabled by default. Exposes a writable `Active Power Limit` slider
+(0–100 %) in Home Assistant. No periodic polling — the daemon reads
+the current value once on the first telemetry frame so HA shows the
+live setpoint as soon as the inverter is producing, then writes
+whatever HA's slider sets and the response is stripped from the
+bytes forwarded to FoxCloud.
 
-```bash
-sudo ./installer/install_pi_zero_gateway.sh --enable-inverter-control
-```
-
-To turn it off again:
+To turn it off:
 
 ```bash
 sudo ./installer/install_pi_zero_gateway.sh --disable-inverter-control
+```
+
+To re-enable after disabling:
+
+```bash
+sudo ./installer/install_pi_zero_gateway.sh --enable-inverter-control
 ```
 
 What it does on the wire:
@@ -269,7 +272,7 @@ What it does on the wire:
 - Writes to `Active Power Limit` (Modbus holding register `0xCA5A`,
   slave 1, value 0–100 in whole percent) when HA publishes to
   `foxess_m1/<serial>/active_power_limit/set`.
-- Reads `0xCA5A` once at session start to populate the HA state.
+- Reads `0xCA5A` once on the first telemetry frame to populate the HA state.
 - Each injected request uses a 4-byte envelope device field with
   byte[3] = `0xAA` (our self-chosen transaction-stream marker); the
   inverter accepts it in parallel with the cloud's marker, and the

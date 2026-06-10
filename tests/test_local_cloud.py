@@ -399,9 +399,11 @@ class LocalCloudProtocolTest(unittest.TestCase):
         cfg = load_config(ROOT / "local-cloud.example.json")
         self.assertFalse(cfg.relay.skip_cert_verify)
 
-    def test_inverter_control_defaults_to_disabled(self) -> None:
+    def test_inverter_control_defaults_to_enabled(self) -> None:
         cfg = load_config(ROOT / "local-cloud.example.json")
-        self.assertFalse(cfg.inverter_control.enabled)
+        # Enabled by default — verified live 2026-06-11; opt-out is via
+        # --disable-inverter-control on the installer.
+        self.assertTrue(cfg.inverter_control.enabled)
         # Default register address matches the live-mapped ActivePowerLimit.
         self.assertEqual(cfg.inverter_control.active_power_limit_address, 0xCA5A)
 
@@ -852,8 +854,11 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(filtered_events[0]["bytes"], len(injected_response_raw))
 
     async def test_local_control_not_constructed_when_inverter_control_disabled(self) -> None:
-        # Default config has inverter_control disabled — no LocalControl at all.
-        app = FoxessLocalCloud(AppConfig())
+        # When inverter_control is explicitly disabled (opt-out), the session
+        # must not allocate a LocalControl at all.
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=False)))
         session = Session(app, 1)
         self.assertIsNone(session.local_control)
 
@@ -1394,7 +1399,7 @@ class MqttPublisherTest(unittest.TestCase):
 
 
 class InstallerTest(unittest.TestCase):
-    def test_pi_installer_inverter_control_disabled_by_default(self) -> None:
+    def test_pi_installer_inverter_control_enabled_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             subprocess.run(
                 [
@@ -1416,7 +1421,7 @@ class InstallerTest(unittest.TestCase):
                 env={**os.environ, "FOXESS_EXISTING_CONFIG": "/nonexistent"},
             )
             cfg = load_config(Path(tmpdir) / "etc/foxess-local-cloud/config.json")
-            self.assertFalse(cfg.inverter_control.enabled)
+            self.assertTrue(cfg.inverter_control.enabled)
 
     def test_pi_installer_inverter_control_enabled_via_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1443,6 +1448,32 @@ class InstallerTest(unittest.TestCase):
             self.assertIn("Inverter control: enabled", result.stdout)
             cfg = load_config(Path(tmpdir) / "etc/foxess-local-cloud/config.json")
             self.assertTrue(cfg.inverter_control.enabled)
+
+    def test_pi_installer_inverter_control_disabled_via_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [
+                    str(ROOT / "installer/install_pi_zero_gateway.sh"),
+                    "--dry-run",
+                    "--preview-dir",
+                    tmpdir,
+                    "--skip-app-copy",
+                    "--non-interactive",
+                    "--ap-passphrase",
+                    "testpass123",
+                    "--mqtt-host",
+                    "mqtt.local",
+                    "--disable-inverter-control",
+                ],
+                cwd=ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                env={**os.environ, "FOXESS_EXISTING_CONFIG": "/nonexistent"},
+            )
+            self.assertIn("Inverter control: disabled", result.stdout)
+            cfg = load_config(Path(tmpdir) / "etc/foxess-local-cloud/config.json")
+            self.assertFalse(cfg.inverter_control.enabled)
 
     def test_pi_installer_dry_run_renders_valid_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -37,7 +37,7 @@ ENABLE_NAT=1
 ENABLE_REDIRECT=1
 RELAY_ENABLED=false
 RELAY_ENABLED_SET=0
-INVERTER_CONTROL_ENABLED=false
+INVERTER_CONTROL_ENABLED=true
 INVERTER_CONTROL_ENABLED_SET=0
 FOXESS_CLOUD_IPS="8.209.116.72 47.91.86.144"
 FOXESS_CLOUD_HOSTS="foxesscloud.com"
@@ -76,10 +76,10 @@ Options:
   --relay                           Enable daemon relay mode in generated config
   --no-relay                        Disable daemon relay mode even if existing config enables it
   --enable-inverter-control         Enable local Modbus write of ActivePowerLimit
-                                    driven by Home Assistant. The write response is
-                                    stripped from the upstream stream so FoxCloud
-                                    sees no extra traffic.
-  --disable-inverter-control        Disable inverter control even if existing config has it on
+                                    driven by Home Assistant (default: enabled).
+                                    The write response is stripped from the upstream
+                                    stream so FoxCloud sees no extra traffic.
+  --disable-inverter-control        Disable the inverter control feature
   --foxess-cloud-ip IP              Add a FoxESS relay upstream hint; repeatable
   --foxess-cloud-host HOST          Resolve this host as a FoxESS relay upstream hint; repeatable
   --no-nat                          Disable NAT from inverter AP to upstream Wi-Fi
