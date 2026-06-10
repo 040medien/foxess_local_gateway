@@ -513,6 +513,37 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("relay_connect_failed", event_names)
         self.assertTrue(any(e == "telemetry" for e, _ in events), "telemetry not decoded after fallback")
 
+    async def test_relay_decrypted_log_includes_full_payload_hex(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+
+        downlink_bytes = bytes.fromhex("01 02 03 ff aa 55 00 13")
+
+        class StubReader:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self._sent = False
+
+            async def read(self, _n: int) -> bytes:
+                if self._sent:
+                    return b""
+                self._sent = True
+                return self._data
+
+        class ClosableWriter(FakeStreamWriter):
+            def close(self) -> None:
+                return None
+
+        await session.relay_upstream_to_client(StubReader(downlink_bytes), ClosableWriter())  # type: ignore[arg-type]
+
+        relay_events = [fields for event, fields in events if event == "relay_decrypted"]
+        self.assertEqual(len(relay_events), 1)
+        self.assertEqual(relay_events[0]["direction"], "upstream_to_client")
+        self.assertEqual(relay_events[0]["bytes"], len(downlink_bytes))
+        self.assertEqual(relay_events[0]["payload_hex"], downlink_bytes.hex(" "))
+
     async def test_telemetry_log_includes_nonzero_raw_words(self) -> None:
         app = FoxessLocalCloud(AppConfig())
         events: list[tuple[str, dict[str, object]]] = []
