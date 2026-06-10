@@ -17,12 +17,12 @@ Two features the FoxESS cloud cannot give you, available here as an opt-in:
   for curtailing solar during negative electricity prices (common in NL
   on sunny weekends), demand-charge avoidance, or any automation the
   cloud's web UI can't reach.
-- **Faster telemetry than the cloud ever sees.** Bypass the inverter's
-  ~90 s native push by polling its Modbus input registers at any cadence
-  (tested down to 5 s). FoxESS's own dashboard can't do this and the
-  public Cloud API caps you at one read per 5 minutes. Responses to our
-  polls are stripped from the bytes forwarded to FoxCloud so the cloud
-  experience stays untouched.
+- **Local Modbus channel** that lets the daemon talk to the inverter
+  directly alongside the FoxESS cloud — same TCP session, different
+  transaction stream. Lays the groundwork for richer integrations
+  beyond the writable Active Power Limit. Responses to anything we
+  inject are stripped from the bytes forwarded to FoxCloud so the
+  cloud's view of the inverter stays untouched.
 
 And the rest:
 

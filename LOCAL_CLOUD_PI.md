@@ -13,16 +13,17 @@ The inverter connects to the Pi AP. TCP/14431 connections from AP clients are
 redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
-Two features in this gateway are unavailable to FoxESS cloud users:
+One feature in this gateway is unavailable to FoxESS cloud users: a
+writable `Active Power Limit` Home Assistant slider that drives a
+local Modbus write straight to the inverter, with no cloud round-trip.
+Off by default. See *Inverter Control (opt-in)* below for how to
+enable it and what it does on the wire.
 
-- A writable `Active Power Limit` Home Assistant slider that drives a
-  local Modbus write straight to the inverter. No cloud round-trip.
-- Faster-than-cloud telemetry polling, by injecting local Modbus reads
-  at any cadence (5 s tested) and stripping the responses from the
-  bytes forwarded to FoxCloud.
-
-Both are off by default. See *Inverter Control (opt-in)* below for how
-to enable them and what they do on the wire.
+The same opt-in also enables a periodic injected Modbus read of the
+device's input-register window for diagnostics and future protocol
+work — the response values currently land in `journald` as
+`command_response` events but aren't yet decoded into HA entities.
+The cloud receives none of the injected traffic.
 
 ## Networking Model
 
