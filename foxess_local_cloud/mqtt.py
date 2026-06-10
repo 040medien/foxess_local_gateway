@@ -164,6 +164,17 @@ class MqttPublisher:
         self._publish(topic, json.dumps({"values": values}, separators=(",", ":")), retain=self.config.retain)
         self._publish_input_register_discovery(serial, len(values))
 
+    # Tentative names for the 25 u16 values in the 0x277E input-register
+    # block, derived from cross-inverter scale-matching against the 90s push
+    # frame (see docs/MEMORY notes from 2026-06-10 RE session). Positions
+    # with strong matches get a hypothesis name; the rest stay "Input Reg NN"
+    # so users know the value is unmapped. Append "?" to anything tentative.
+    _INPUT_REG_NAMES: dict[int, str] = {
+        0: "AC Power Snapshot?",
+        10: "PV Power Snapshot?",
+        15: "AC Power Peak?",
+    }
+
     def _publish_input_register_discovery(self, serial: str, count: int) -> None:
         if serial in self._input_register_announced:
             return
@@ -178,9 +189,10 @@ class MqttPublisher:
         state_topic = self.input_register_state_topic(serial)
         availability = self._availability_block(serial)
         for i in range(count):
+            entity_name = self._INPUT_REG_NAMES.get(i, f"Input Reg {i:02d}")
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/input_reg_{i:02d}/config"
             payload: dict[str, Any] = {
-                "name": f"Input Reg {i:02d}",
+                "name": entity_name,
                 "unique_id": f"foxess_{serial}_input_reg_{i:02d}",
                 "object_id": f"foxess_{serial}_input_reg_{i:02d}",
                 "state_topic": state_topic,
