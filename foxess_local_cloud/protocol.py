@@ -223,6 +223,34 @@ def parse_modbus_command(frame: Frame) -> dict:
     return {}
 
 
+def is_modbus_read_response(frame: Frame) -> bool:
+    """A 7f7f frame carrying a Modbus read response (fn 0x03/0x04 with data).
+
+    Distinguished from same-function requests by payload structure: a request
+    is always exactly 6 bytes (slave+fn+addr+count) while a read response is
+    ``3 + byte_count`` bytes (slave+fn+bc+data) with ``bc`` an even number
+    matching the data length. Requests never satisfy that shape, so the check
+    is unambiguous.
+    """
+    if frame.start != b"\x7f\x7f" or len(frame.payload) < 5:
+        return False
+    fn = frame.payload[1]
+    if fn not in (MODBUS_FN_READ_HOLDING, MODBUS_FN_READ_INPUT):
+        return False
+    bc = frame.payload[2]
+    return bc > 0 and bc % 2 == 0 and len(frame.payload) == 3 + bc
+
+
+def parse_modbus_read_response(frame: Frame) -> dict:
+    """Decode a Modbus read response PDU into slave/function/byte_count/values."""
+    if not is_modbus_read_response(frame):
+        return {}
+    payload = frame.payload
+    bc = payload[2]
+    values = [int.from_bytes(payload[3 + i * 2 : 5 + i * 2], "big") for i in range(bc // 2)]
+    return {"slave": payload[0], "function": payload[1], "byte_count": bc, "values": values}
+
+
 def is_mesh_root_frame(frame: Frame) -> bool:
     """A 7f7f frame in which the inverter declares it is the mesh root, i.e.
     directly associated to the Pi's AP.

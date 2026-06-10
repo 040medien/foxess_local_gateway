@@ -402,6 +402,13 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-09
 
+- **Decode inverter → cloud Modbus read responses.** Reads issued by
+  the cloud (`command_frame` with function 0x03 or 0x04) are now
+  joined to their response on the way back: the daemon emits a
+  `command_response` event with the decoded register values, joined
+  by envelope device bytes to the original request so the response
+  carries the target `address_hex` and `count` for context. Makes the
+  read side of the setting protocol as readable as the write side.
 - **Decode cloud → inverter Modbus command frames.** The FoxESS cloud
   pushes setting reads and writes as Modbus PDUs (function 0x03 read
   holding, 0x04 read input, 0x06 write single, 0x10 write multiple)
