@@ -16,7 +16,8 @@ the FoxESS app and cloud are not needed at any point.
 - MQTT auto discovery creates Home Assistant sensors automatically, neatly bundled into one
   device per inverter.
 - Writable `Active Power Limit` slider in Home Assistant (opt-in) for
-  curtailment during negative electricity prices or demand-charge avoidance.
+  curtailment during negative electricity prices or demand-charge avoidance (German
+  Nulleinspeisung).
 - No Home Assistant HACS Add-ons needed
 - Continue using your inverter even if the FoxESS cloud changes, is offline or gets disabled.
 - Works with multiple inverters connected through the Pi AP at the same time, even if they use
@@ -321,20 +322,20 @@ accumulate more lifetime energy or hit error states.
 
 ### Is the decoded data complete?
 
-The fields that matter for everyday solar monitoring — PV power per
-string, AC power/voltage/current/frequency, inverter temperature,
-operating state, lifetime generation and lifetime grid export,
-current fault state with the last fault's code/message/timestamp,
-and firmware/hardware versions — are decoded and published as Home
-Assistant sensors. Fault codes are looked up against an embedded
-copy of the FoxESS Q/M-series service manual table, so the
-`last_fault_message` sensor shows the human-readable description
-without needing an internet lookup. A handful of 2-byte words in the
-238-byte telemetry frame still do not have confirmed semantics; they
-are logged as `raw_u16_*` events so they can be inspected over time.
-Likely candidates for those unknowns include daily-yield reset
-markers and grid-export sub-counters. Pull requests adding field
-mappings backed by observed data are welcome.
+**For M1 inverters: yes.** Every field a regular owner cares about is
+decoded and published as a Home Assistant sensor: PV power, voltage,
+and current per string; AC power, voltage, current, and frequency;
+inverter temperature; operating state; lifetime generation and
+lifetime grid export; current fault state with the last fault's
+code, human-readable message, and timestamp; firmware and hardware
+versions; mesh role for multi-inverter setups. Fault messages come
+from an embedded copy of the FoxESS Q/M-series service manual table,
+so no internet lookup is needed.
+
+A handful of bytes in the 238-byte push frame still don't have
+confirmed semantics and are logged as `raw_u16_*` for future
+investigation, but none of them carry data a Home Assistant user
+needs day to day.
 
 Q1 four-string PV (PV3/PV4) decoding is implemented model-aware but
 has not yet been validated on actual Q1 hardware. The same applies to
