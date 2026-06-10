@@ -637,16 +637,12 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
             build_modbus_read_holding,
             build_modbus_read_input,
             build_modbus_write_single,
-            is_injected_device,
             is_modbus_command,
             parse_modbus_command,
         )
 
-        device = b"\x7f\x00\x00\x01"
-        self.assertTrue(is_injected_device(device))
-        self.assertTrue(is_injected_device(b"\xff\x00\x00\x01"))  # response echo with bit 7 set
-        self.assertFalse(is_injected_device(b"\x12\x39\x77\x0b"))  # cloud-issued
-
+        # Mimics cloud envelope: first byte 0x12, last byte 0x0b.
+        device = b"\x12\x00\x01\x0b"
         for raw, want_address, want_payload in (
             (build_modbus_write_single(device, 0xCA5A, 100), 0xCA5A, {"value": 100}),
             (build_modbus_read_holding(device, 0xC419, 4), 0xC419, {"count": 4}),
@@ -660,18 +656,29 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(frame.func, 0xE2)
             self.assertTrue(frame.valid_crc)
             self.assertTrue(is_modbus_command(frame))
-            self.assertTrue(is_injected_device(frame.device))
+            self.assertEqual(frame.device, device)
             pdu = parse_modbus_command(frame)
             self.assertEqual(pdu["address"], want_address)
             for key, value in want_payload.items():
                 self.assertEqual(pdu[key], value)
 
+    async def test_local_control_next_device_mimics_cloud_pattern(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import INJECTED_DEVICE_FIRST, INJECTED_DEVICE_LAST
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        session = Session(app, 1)
+        device = session.local_control._next_device()  # type: ignore[union-attr]
+        self.assertEqual(device[0], INJECTED_DEVICE_FIRST)
+        self.assertEqual(device[3], INJECTED_DEVICE_LAST)
+        self.assertEqual(INJECTED_DEVICE_FIRST, 0x12)
+        self.assertEqual(INJECTED_DEVICE_LAST, 0x0B)
+
     async def test_local_control_write_register_emits_frame_to_inverter(self) -> None:
         from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import INJECTED_DEVICE_FIRST, INJECTED_DEVICE_LAST
         from foxess_local_cloud.protocol import (
-            INJECTED_DEVICE_MARKER,
             extract_frames,
-            is_injected_device,
             is_modbus_command,
             parse_modbus_command,
         )
@@ -694,8 +701,8 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(frames), 1)
         frame = frames[0]
         self.assertTrue(frame.valid_crc)
-        self.assertEqual(frame.device[0], INJECTED_DEVICE_MARKER)
-        self.assertTrue(is_injected_device(frame.device))
+        self.assertEqual(frame.device[0], INJECTED_DEVICE_FIRST)
+        self.assertEqual(frame.device[3], INJECTED_DEVICE_LAST)
         self.assertTrue(is_modbus_command(frame))
         pdu = parse_modbus_command(frame)
         self.assertEqual(pdu, {"slave": 1, "function": 0x06, "address": 0xCA5A, "value": 75})
@@ -746,6 +753,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_relay_strips_injected_responses_from_upstream_forward(self) -> None:
         from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import normalize_device
         from foxess_local_cloud.protocol import extract_frames, make_frame
 
         app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
@@ -755,11 +763,16 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
         # Two frames arriving on the same TCP read from the inverter: a regular
         # telemetry frame (must reach FoxCloud) followed by the echoed response
-        # to our injected ActivePowerLimit read (must NOT reach FoxCloud).
+        # to a previously-injected ActivePowerLimit read (must NOT reach
+        # FoxCloud). Seed the outstanding set with the request's normalized
+        # device key so the response is recognised as ours.
         cloud_frame = telemetry_frame()
+        request_device = b"\x12\x00\x01\x0b"
+        echoed_device = bytes([request_device[0] | 0x80]) + request_device[1:]
+        session.local_control._outstanding.add(normalize_device(request_device))  # type: ignore[union-attr]
         injected_response_raw = make_frame(
             b"\x7f\x7f",
-            b"\xff\x00\x00\x01",  # injected marker echoed back with bit 7 set
+            echoed_device,
             0xE2,
             bytes.fromhex("01030200 4b".replace(" ", "")),
             b"\xf7\xf7",
