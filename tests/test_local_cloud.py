@@ -662,16 +662,20 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
             for key, value in want_payload.items():
                 self.assertEqual(pdu[key], value)
 
-    async def test_session_captures_marker_from_cloud_command_frame(self) -> None:
+    async def test_session_observes_cloud_marker_as_diagnostic(self) -> None:
         from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import INJECTED_SESSION_MARKER
         from foxess_local_cloud.protocol import extract_frames, make_frame
 
         app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
         session = Session(app, 1)
-        self.assertIsNone(session.local_control.session_marker)  # type: ignore[union-attr]
+        # Our marker is pre-seeded; observing the cloud's marker is purely
+        # diagnostic and must NOT replace it (otherwise we'd lose multi-
+        # channel injection capability).
+        self.assertEqual(session.local_control.session_marker, INJECTED_SESSION_MARKER)  # type: ignore[union-attr]
 
-        # Synthesised cloud command_frame: read holding at 0xCA5A, device
-        # bytes 11 23 18 cf (cloud-style, byte[3]=0xcf is the marker).
         cloud_request = make_frame(
             b"\x7f\x7f",
             b"\x11\x23\x18\xcf",
@@ -682,32 +686,50 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         frame = extract_frames(bytearray(cloud_request))[0]
         session.handle_upstream_frame(frame)
 
-        self.assertEqual(session.local_control.session_marker, 0xCF)  # type: ignore[union-attr]
+        self.assertEqual(session.local_control.session_marker, INJECTED_SESSION_MARKER)  # type: ignore[union-attr]
+        seen = [fields for event, fields in events if event == "inverter_control_cloud_marker_seen"]
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["cloud_marker"], 0xCF)
 
-    async def test_local_control_next_device_requires_session_marker(self) -> None:
+    async def test_local_control_next_device_uses_self_chosen_marker(self) -> None:
         from foxess_local_cloud.config import InverterControl
-        from foxess_local_cloud.local_control import DEVICE_BYTE_READ, DEVICE_BYTE_WRITE
+        from foxess_local_cloud.local_control import DEVICE_BYTE_READ, DEVICE_BYTE_WRITE, INJECTED_SESSION_MARKER
 
         app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
         session = Session(app, 1)
-        # Without a session marker the helper refuses to mint a device.
-        self.assertIsNone(session.local_control._next_device(DEVICE_BYTE_READ))  # type: ignore[union-attr]
-        # Once the marker is observed (would come from a cloud command_frame),
-        # device bytes encode op_type / counter / marker as per the cloud's
-        # observed pattern (byte[0]=op, bytes[1-2]=ctr LE, byte[3]=marker).
-        session.local_control.observe_session_marker(0xCF)  # type: ignore[union-attr]
+        # Marker is pre-seeded at session start — no observation needed,
+        # injection works from the very first poll tick.
         read_device = session.local_control._next_device(DEVICE_BYTE_READ)  # type: ignore[union-attr]
         write_device = session.local_control._next_device(DEVICE_BYTE_WRITE)  # type: ignore[union-attr]
         self.assertEqual(read_device[0], DEVICE_BYTE_READ)
         self.assertEqual(write_device[0], DEVICE_BYTE_WRITE)
-        self.assertEqual(read_device[3], 0xCF)
-        self.assertEqual(write_device[3], 0xCF)
+        self.assertEqual(read_device[3], INJECTED_SESSION_MARKER)
+        self.assertEqual(write_device[3], INJECTED_SESSION_MARKER)
         # Counter advances per device and starts in the high range to avoid
         # colliding with the cloud's transactions.
         ctr_read = read_device[1] | (read_device[2] << 8)
         ctr_write = write_device[1] | (write_device[2] << 8)
         self.assertEqual(ctr_write, ctr_read + 1)
         self.assertGreater(ctr_read, 0xF000)
+
+    async def test_local_control_cloud_marker_observed_is_diagnostic_only(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import INJECTED_SESSION_MARKER
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        # Cloud uses 0xb3. We keep our self-chosen INJECTED_SESSION_MARKER.
+        session.local_control.observe_session_marker(0xB3)  # type: ignore[union-attr]
+        self.assertEqual(session.local_control.session_marker, INJECTED_SESSION_MARKER)  # type: ignore[union-attr]
+        seen = [fields for event, fields in events if event == "inverter_control_cloud_marker_seen"]
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["cloud_marker"], 0xB3)
+        # Idempotent: observing the same value again doesn't re-emit.
+        session.local_control.observe_session_marker(0xB3)  # type: ignore[union-attr]
+        events_again = [fields for event, fields in events if event == "inverter_control_cloud_marker_seen"]
+        self.assertEqual(len(events_again), 1)
 
     async def test_local_control_write_register_emits_frame_to_inverter(self) -> None:
         from foxess_local_cloud.config import InverterControl
@@ -727,16 +749,6 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
         inverter_writer = FakeStreamWriter()
         session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
-        # Without a session marker, the write is dropped (correct — we can't
-        # safely inject before observing the cloud's marker).
-        await session.local_control.write_register(0xCA5A, 75)  # type: ignore[union-attr]
-        self.assertEqual(inverter_writer.writes, [])
-        dropped = [e for e in events if e[0] == "injected_drop"]
-        self.assertEqual(len(dropped), 1)
-        self.assertEqual(dropped[0][1]["reason"], "no_session_marker")
-
-        # Once marker observed, the write goes out with op-type byte and marker.
-        session.local_control.observe_session_marker(0xCF)  # type: ignore[union-attr]
         await session.local_control.write_register(0xCA5A, 75)  # type: ignore[union-attr]
 
         self.assertEqual(len(inverter_writer.writes), 1)
@@ -746,7 +758,8 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         frame = frames[0]
         self.assertTrue(frame.valid_crc)
         self.assertEqual(frame.device[0], DEVICE_BYTE_WRITE)
-        self.assertEqual(frame.device[3], 0xCF)
+        from foxess_local_cloud.local_control import INJECTED_SESSION_MARKER
+        self.assertEqual(frame.device[3], INJECTED_SESSION_MARKER)
         self.assertTrue(is_modbus_command(frame))
         pdu = parse_modbus_command(frame)
         self.assertEqual(pdu, {"slave": 1, "function": 0x06, "address": 0xCA5A, "value": 75})
@@ -772,7 +785,6 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
         inverter_writer = ClosableWriter()
         session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
-        session.local_control.observe_session_marker(0xCF)  # type: ignore[union-attr]
 
         device = await session.local_control.read_holding(0xCA5A, 1)  # type: ignore[union-attr]
         self.assertIsNotNone(device)
@@ -863,7 +875,6 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         session = Session(app, 1)
         inverter_writer = FakeStreamWriter()
         session.local_control.attach_inverter_writer(inverter_writer)  # type: ignore[union-attr]
-        session.local_control.observe_session_marker(0xCF)  # type: ignore[union-attr]
 
         await session._poll_once()  # type: ignore[attr-defined]
 
@@ -1063,7 +1074,6 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
                 return None
 
         session.local_control.attach_inverter_writer(ClosableWriter())  # type: ignore[union-attr]
-        session.local_control.observe_session_marker(0xCF)  # type: ignore[union-attr]
         device = await session.local_control.read_holding(0xCA5A, 1)  # type: ignore[union-attr]
         echoed = bytes([device[0] | 0x80]) + device[1:]
         response = make_frame(

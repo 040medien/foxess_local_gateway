@@ -64,6 +64,10 @@ DEVICE_BYTE_WRITE = 0x12
 # low-thousands range so request transaction-ids don't collide with cloud
 # transactions in flight on the same session.
 INJECTED_COUNTER_START = 0xF000
+# Our chosen byte[3] of the envelope device field. See ``LocalControl.__init__``
+# for the full rationale; in short, the inverter accepts any value but every
+# request on a given stream must reuse the same one.
+INJECTED_SESSION_MARKER = 0xAA
 
 
 class LocalControl:
@@ -86,38 +90,48 @@ class LocalControl:
         # Looked up (without removal) when classifying uplink frames as ours
         # for upstream-stripping purposes.
         self._outstanding: set[bytes] = set()
-        # byte[3] of the cloud's envelope device field. The inverter validates
-        # this per-session marker; without observing it from a cloud-issued
-        # command_frame first, our injections would be rejected (echoed as
-        # NAK). Set via ``observe_session_marker``.
-        self._session_marker: int | None = None
+        # Last cloud marker we logged via observe_session_marker, kept for
+        # dedup so the diagnostic event only fires when it changes.
+        self._cloud_marker_seen: int | None = None
+        # Self-chosen byte[3] of the envelope device field.
+        #
+        # The inverter validates byte[3] as a "transaction stream marker" —
+        # any value is acceptable, but every request on a given stream must
+        # use the same one (mismatches get echoed back as NAK). The cloud
+        # picks its own marker per session; we pick ours independently and
+        # the inverter happily handles both streams in parallel (verified
+        # live 2026-06-10: cloud=0xb3 and ours=0xaa receiving real Modbus
+        # responses in the same TCP session).
+        #
+        # 0xAA is just a constant; could be any byte not currently in use
+        # by the cloud on the same TCP session. Collisions are unlikely
+        # because we pair this with a counter starting at 0xF000 while the
+        # cloud's counter advances from low values.
+        self._session_marker: int = INJECTED_SESSION_MARKER
 
     def attach_inverter_writer(self, writer: asyncio.StreamWriter) -> None:
         self.inverter_writer = writer
 
     def observe_session_marker(self, marker: int) -> None:
-        """Called by the Session when a cloud-originated command_frame is
-        seen, with that frame's envelope ``device[3]``. First observation
-        unlocks injection; subsequent identical observations are no-ops."""
-        if self._session_marker == marker:
+        """Diagnostic. Records the cloud's marker for the session — useful
+        for confirming the cloud is in fact using a different value from
+        ours and that the two streams coexist. Does not change behaviour."""
+        if marker == self._cloud_marker_seen:
             return
-        was_unset = self._session_marker is None
-        self._session_marker = marker
+        self._cloud_marker_seen = marker
         self._emit(
-            "inverter_control_session_marker",
+            "inverter_control_cloud_marker_seen",
             session=self._session_id,
-            marker=marker,
-            marker_hex=f"0x{marker:02x}",
-            first=was_unset,
+            cloud_marker=marker,
+            cloud_marker_hex=f"0x{marker:02x}",
+            our_marker_hex=f"0x{self._session_marker:02x}",
         )
 
     @property
-    def session_marker(self) -> int | None:
+    def session_marker(self) -> int:
         return self._session_marker
 
-    def _next_device(self, op_type: int) -> bytes | None:
-        if self._session_marker is None:
-            return None
+    def _next_device(self, op_type: int) -> bytes:
         self._counter = (self._counter + 1) & 0xFFFF
         return bytes(
             [
@@ -137,18 +151,8 @@ class LocalControl:
 
     async def write_register(self, address: int, value: int) -> bytes | None:
         """Inject a Modbus write-single-register request. Returns the device
-        bytes used, or None if the inverter writer or session marker isn't
-        ready yet."""
+        bytes used, or None if no inverter writer is attached."""
         device = self._next_device(DEVICE_BYTE_WRITE)
-        if device is None:
-            self._emit(
-                "injected_drop",
-                session=self._session_id,
-                reason="no_session_marker",
-                address_hex=f"0x{address:04x}",
-                value=value,
-            )
-            return None
         frame = build_modbus_write_single(device, address, value)
         self._emit(
             "injected_write",
@@ -163,15 +167,6 @@ class LocalControl:
 
     async def read_holding(self, address: int, count: int) -> bytes | None:
         device = self._next_device(DEVICE_BYTE_READ)
-        if device is None:
-            self._emit(
-                "injected_drop",
-                session=self._session_id,
-                reason="no_session_marker",
-                address_hex=f"0x{address:04x}",
-                count=count,
-            )
-            return None
         frame = build_modbus_read_holding(device, address, count)
         self._register_pending_read(normalize_device(device), address, count)
         self._emit(
@@ -188,15 +183,6 @@ class LocalControl:
 
     async def read_input(self, address: int, count: int) -> bytes | None:
         device = self._next_device(DEVICE_BYTE_READ)
-        if device is None:
-            self._emit(
-                "injected_drop",
-                session=self._session_id,
-                reason="no_session_marker",
-                address_hex=f"0x{address:04x}",
-                count=count,
-            )
-            return None
         frame = build_modbus_read_input(device, address, count)
         self._register_pending_read(normalize_device(device), address, count)
         self._emit(
