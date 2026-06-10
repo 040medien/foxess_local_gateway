@@ -402,6 +402,13 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-09
 
+- **Decode cloud → inverter Modbus command frames.** The FoxESS cloud
+  pushes setting reads and writes as Modbus PDUs (function 0x03 read
+  holding, 0x04 read input, 0x06 write single, 0x10 write multiple)
+  wrapped in the `7f7f`/`f7f7` command envelope. The daemon now emits
+  a structured `command_frame` log line for each, with `function_name`,
+  `address_hex`, and either `value`/`count`/`values`. First confirmed
+  register: ActivePowerLimit at `0xCA5A` (slave 1), value in percent.
 - **Full payload hex on relay logs.** The `relay_decrypted` log line
   now includes `payload_hex` in both directions, not just byte length.
   Useful when reverse-engineering cloud → inverter command frames

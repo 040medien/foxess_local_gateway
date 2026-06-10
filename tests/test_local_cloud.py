@@ -513,6 +513,70 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("relay_connect_failed", event_names)
         self.assertTrue(any(e == "telemetry" for e, _ in events), "telemetry not decoded after fallback")
 
+    async def test_command_frame_decodes_modbus_write_single(self) -> None:
+        from foxess_local_cloud.protocol import is_modbus_command, parse_modbus_command
+
+        # ActivePowerLimit = 100% captured from the FoxESS installer portal:
+        # 7f7f-envelope command frame containing Modbus write-single-register
+        # for slave 01, addr 0xCA5A, value 0x0064.
+        raw = bytes.fromhex("7f 7f 12 39 77 0b e2 00 06 01 06 ca 5a 00 64 86 60 f7 f7".replace(" ", ""))
+        frame = extract_frames(bytearray(raw))[0]
+        self.assertTrue(frame.valid_crc)
+        self.assertTrue(is_modbus_command(frame))
+        pdu = parse_modbus_command(frame)
+        self.assertEqual(pdu, {"slave": 1, "function": 0x06, "address": 0xCA5A, "value": 100})
+
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.handle_upstream_frame(frame)
+
+        command_events = [fields for event, fields in events if event == "command_frame"]
+        self.assertEqual(len(command_events), 1)
+        self.assertEqual(command_events[0]["function_name"], "write_single")
+        self.assertEqual(command_events[0]["address"], 0xCA5A)
+        self.assertEqual(command_events[0]["address_hex"], "0xca5a")
+        self.assertEqual(command_events[0]["value"], 100)
+
+    async def test_command_frame_decodes_modbus_write_multiple(self) -> None:
+        from foxess_local_cloud.protocol import parse_modbus_command
+
+        # Reactive config save from the FoxESS installer portal: write multiple
+        # registers to 0xC92C, count=27. 74 bytes total.
+        captured_hex = (
+            "7f 7f 12 7d 85 0b e2 00 3d "
+            "01 10 c9 2c 00 1b 36 "
+            "00 00 00 04 00 63 00 00 00 64 00 64 00 64 00 64 00 64 00 64 00 64 00 64 "
+            "20 80 1f 40 "
+            "20 80 00 00 20 80 00 00 20 80 00 00 20 80 00 00 "
+            "00 1e 00 14 02 26 07 08 07 d0 "
+            "4e f8 f7 f7"
+        )
+        raw = bytes.fromhex(captured_hex.replace(" ", ""))
+        frame = extract_frames(bytearray(raw))[0]
+        self.assertTrue(frame.valid_crc)
+        pdu = parse_modbus_command(frame)
+        self.assertEqual(pdu["slave"], 1)
+        self.assertEqual(pdu["function"], 0x10)
+        self.assertEqual(pdu["address"], 0xC92C)
+        self.assertEqual(pdu["count"], 27)
+        self.assertEqual(pdu["byte_count"], 54)
+        self.assertEqual(len(pdu["values"]), 27)
+        self.assertEqual(pdu["values"][1], 4)  # PFmode enum
+        self.assertEqual(pdu["values"][12], 0x2080)  # PflockinV (260.0 * 32)
+
+    async def test_command_frame_ignores_non_modbus_7f_frames(self) -> None:
+        from foxess_local_cloud.protocol import is_modbus_command
+
+        # Mesh-role declaration frames also use 7f7f framing but the payload
+        # begins with 01 05 (a non-Modbus opcode for us); they must not be
+        # misclassified as Modbus commands.
+        mesh_payload = bytes.fromhex("0105010100060001020304050603aabbccddee04000000ee")
+        raw = make_frame(b"\x7f\x7f", b"\x00\x00\x00\x00", 0xE2, mesh_payload, b"\xf7\xf7")
+        frame = extract_frames(bytearray(raw))[0]
+        self.assertFalse(is_modbus_command(frame))
+
     async def test_relay_decrypted_log_includes_full_payload_hex(self) -> None:
         app = FoxessLocalCloud(AppConfig())
         events: list[tuple[str, dict[str, object]]] = []
