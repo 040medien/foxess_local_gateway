@@ -189,10 +189,12 @@ class Session:
         publisher.register_active_power_limit_handler(self.serial, _on_setpoint)
         publisher.publish_active_power_limit_discovery(self.serial)
         self._inverter_control_command_registered = True
-        # Fire a one-shot read of the current ActivePowerLimit so HA has a
-        # real state value from the start instead of "unknown". The response
-        # flows through the existing command_response handler.
-        asyncio.create_task(self._read_active_power_limit_once())
+        # Diagnostic experiment 2026-06-10: dropping the session-start one-shot
+        # read. Injecting Modbus at T+~20ms after the inverter's first
+        # registration frame consistently kills the TLS session with
+        # APPLICATION_DATA_AFTER_CLOSE_NOTIFY (the earlier 5s-delayed polling
+        # loop never had this problem). HA state will start as "unknown"
+        # until the next user setpoint or cloud read response refreshes it.
 
     async def _handle_active_power_limit_setpoint(self, percent: int) -> None:
         if self.local_control is None or not self.serial:
