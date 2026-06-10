@@ -9,17 +9,17 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
-- No data leaves your network, including during initial setup — the Pi can
-  provision the inverter directly over Bluetooth, so the FoxCloud mobile
-  app is optional.
-- Optional relay mode to the Fox ESS cloud is supported.
-- MQTT auto discovery creates Home Assistant sensors automatically, neatly bundled into one
-  device per inverter.
 - Writable `Active Power Limit` slider in Home Assistant (opt-in) for
   curtailment during negative electricity prices or demand-charge avoidance (German
   Nulleinspeisung).
-- No Home Assistant HACS Add-ons needed
+- No data leaves your network, including during initial setup — the Pi can
+  provision the inverter directly over Bluetooth, so the FoxCloud mobile
+  app is optional.
 - Continue using your inverter even if the FoxESS cloud changes, is offline or gets disabled.
+- Optional relay mode to the Fox ESS cloud is supported.
+- MQTT auto discovery creates Home Assistant sensors automatically, neatly bundled into one
+  device per inverter.
+- No Home Assistant HACS Add-ons needed
 - Works with multiple inverters connected through the Pi AP at the same time, even if they use
   their own mesh network.
 
