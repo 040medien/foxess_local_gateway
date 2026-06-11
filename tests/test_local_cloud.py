@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from foxess_local_cloud.config import AppConfig, MqttConfig, RelayConfig, load_config
 from foxess_local_cloud.mqtt import MqttPublisher, metadata_for
@@ -441,6 +442,78 @@ class LocalCloudProtocolTest(unittest.TestCase):
 
 
 class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_expected_tls_close_failure_is_logged_as_disconnect(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+
+        async def fail_session(_reader: object, _writer: object) -> None:
+            raise TimeoutError("SSL shutdown timed out")
+
+        class StubSession:
+            serial = TEST_SERIAL
+
+            def __init__(self, _app: object, _session_id: int) -> None:
+                pass
+
+            run = staticmethod(fail_session)
+
+        class StubWriter:
+            closed = False
+
+            def get_extra_info(self, _key: str) -> tuple[str, int]:
+                return ("192.168.50.2", 12345)
+
+            def close(self) -> None:
+                self.closed = True
+
+            async def wait_closed(self) -> None:
+                raise TimeoutError("SSL shutdown timed out")
+
+        writer = StubWriter()
+        with patch("foxess_local_cloud.server.Session", StubSession):
+            await app.handle_client(object(), writer)  # type: ignore[arg-type]
+
+        self.assertTrue(writer.closed)
+        self.assertNotIn("session_error", [event for event, _fields in events])
+        self.assertNotIn("disconnect_error", [event for event, _fields in events])
+        disconnect = [fields for event, fields in events if event == "disconnect"]
+        self.assertEqual(disconnect, [{"session": 1, "serial": TEST_SERIAL, "reason": "ssl_shutdown_timeout"}])
+
+    async def test_unexpected_close_failure_is_contained_and_logged(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+
+        async def fail_session(_reader: object, _writer: object) -> None:
+            raise ValueError("bad protocol state")
+
+        class StubSession:
+            serial = None
+
+            def __init__(self, _app: object, _session_id: int) -> None:
+                pass
+
+            run = staticmethod(fail_session)
+
+        class StubWriter:
+            def get_extra_info(self, _key: str) -> tuple[str, int]:
+                return ("192.168.50.2", 12345)
+
+            def close(self) -> None:
+                pass
+
+            async def wait_closed(self) -> None:
+                raise RuntimeError("close failed")
+
+        with patch("foxess_local_cloud.server.Session", StubSession):
+            await app.handle_client(object(), StubWriter())  # type: ignore[arg-type]
+
+        self.assertIn("session_error", [event for event, _fields in events])
+        self.assertIn("disconnect_error", [event for event, _fields in events])
+        disconnect = [fields for event, fields in events if event == "disconnect"]
+        self.assertEqual(disconnect, [{"session": 1, "serial": "", "reason": "session_error"}])
+
     async def test_invalid_crc_frame_is_not_acked_or_accepted(self) -> None:
         app = FoxessLocalCloud(AppConfig())
         events: list[tuple[str, dict[str, object]]] = []

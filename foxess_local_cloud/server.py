@@ -56,6 +56,25 @@ _MODBUS_NAMES = {
     0x10: "write_multiple",
 }
 
+_EXPECTED_TLS_DISCONNECT_ERRORS = (
+    "application data after close notify",
+    "eof occurred in violation of protocol",
+    "ssl shutdown timed out",
+)
+
+
+def expected_disconnect_reason(exc: BaseException) -> str | None:
+    message = str(exc).lower()
+    if isinstance(exc, TimeoutError) and "ssl shutdown timed out" in message:
+        return "ssl_shutdown_timeout"
+    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return "connection_lost"
+    if isinstance(exc, ssl.SSLError) and any(
+        expected in message for expected in _EXPECTED_TLS_DISCONNECT_ERRORS
+    ):
+        return "tls_connection_lost"
+    return None
+
 
 class JsonLogger:
     def __init__(self, path: Path | None = None) -> None:
@@ -112,14 +131,33 @@ class FoxessLocalCloud:
         peer = writer.get_extra_info("peername")
         self.logger.emit("connect", session=session_id, peer=str(peer))
         session = Session(self, session_id)
+        disconnect_reason = "eof"
         try:
             await session.run(reader, writer)
         except Exception as exc:
-            self.logger.emit("session_error", session=session_id, error=str(exc))
+            expected_reason = expected_disconnect_reason(exc)
+            if expected_reason:
+                disconnect_reason = expected_reason
+            else:
+                disconnect_reason = "session_error"
+                self.logger.emit("session_error", session=session_id, error=str(exc))
         finally:
-            writer.close()
-            await writer.wait_closed()
-            self.logger.emit("disconnect", session=session_id, serial=session.serial or "")
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception as exc:
+                expected_reason = expected_disconnect_reason(exc)
+                if expected_reason:
+                    if disconnect_reason == "eof":
+                        disconnect_reason = expected_reason
+                else:
+                    self.logger.emit("disconnect_error", session=session_id, error=str(exc))
+            self.logger.emit(
+                "disconnect",
+                session=session_id,
+                serial=session.serial or "",
+                reason=disconnect_reason,
+            )
 
     def publish_telemetry(self, session_id: int, telemetry: Any, raw_nonzero_u16: dict[str, int] | None = None) -> None:
         serial = telemetry.serial
