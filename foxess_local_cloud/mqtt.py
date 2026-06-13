@@ -160,12 +160,7 @@ class MqttPublisher:
             self.emit("mqtt_command_handler_error", topic=topic, error=str(exc))
 
     def close(self) -> None:
-        if self.client is not None:
-            try:
-                self.client.loop_stop()
-                self.client.disconnect()
-            except Exception as exc:
-                self.emit("mqtt_close_error", error=str(exc))
+        self._teardown_client()
 
     def active_power_limit_command_topic(self, serial: str) -> str:
         return f"{self.config.topic_prefix}/{serial}/active_power_limit/set"
