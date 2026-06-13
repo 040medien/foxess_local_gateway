@@ -123,7 +123,26 @@ class FoxessLocalCloud:
         sockets = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
         self.logger.emit("listen", sockets=sockets)
         async with server:
-            await server.serve_forever()
+            watchdog = asyncio.create_task(self._mqtt_watchdog())
+            try:
+                await server.serve_forever()
+            finally:
+                watchdog.cancel()
+
+    async def _mqtt_watchdog(self) -> None:
+        """Periodically verify the MQTT network loop is alive and rebuild the
+        client if it died. Without this, a dead paho loop thread silently
+        drops every publish (rc=0, no on_disconnect) until the daemon is
+        manually restarted."""
+        interval = self.config.mqtt.health_check_interval_seconds
+        if interval <= 0 or not self.mqtt.enabled:
+            return
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                self.mqtt.ensure_connected()
+            except Exception as exc:
+                self.logger.emit("mqtt_watchdog_error", error=str(exc))
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         session_id = self.next_session_id

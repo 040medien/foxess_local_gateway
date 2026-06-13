@@ -20,6 +20,9 @@ class MqttConfig:
     expire_after_seconds: int | None = 180
     keepalive_seconds: int = 180
     reconnect_max_delay_seconds: int = 15
+    # How often the daemon checks that paho's network loop is still alive and
+    # rebuilds the client if it died. 0 disables the watchdog.
+    health_check_interval_seconds: int = 30
     debug: bool = False
 
 
@@ -117,6 +120,7 @@ def load_config(path: Path | None) -> AppConfig:
             expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 180)),
             keepalive_seconds=int(mqtt_raw.get("keepalive_seconds", 180)),
             reconnect_max_delay_seconds=int(mqtt_raw.get("reconnect_max_delay_seconds", 15)),
+            health_check_interval_seconds=int(mqtt_raw.get("health_check_interval_seconds", 30)),
             debug=bool(mqtt_raw.get("debug", False)),
         ),
         publish_min_interval_seconds=float(raw.get("publish_min_interval_seconds", 0.0)),

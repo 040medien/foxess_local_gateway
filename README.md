@@ -431,6 +431,19 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-06-13
+
+- **Sensors recover on their own after a broker hiccup.** Previously,
+  if the connection to the MQTT broker dropped in a certain way (for
+  example after a reboot, or when Home Assistant restarted), the
+  gateway could stay quietly connected but stop sending updates, so
+  the sensors froze on stale values until the gateway was restarted by
+  hand. The gateway now checks its own broker connection in the
+  background and re-establishes it automatically, so sensors resume
+  updating without intervention. The check interval is configurable
+  via `mqtt.health_check_interval_seconds` (default 30 s; set to 0 to
+  disable).
+
 ### 2026-06-11
 
 - **Writable `Active Power Limit` via MQTT.** Home Assistant gets a
