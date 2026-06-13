@@ -69,6 +69,60 @@ class MqttPublisher:
 
         return mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
+    def loop_is_running(self) -> bool:
+        """Best-effort check that paho's network loop thread is alive.
+
+        Returns False when the loop never started (``connect`` failed before
+        ``loop_start``) or when the thread died — e.g. an exception escaped the
+        loop. A dead loop is invisible otherwise: ``client.publish`` keeps
+        returning rc=0 while nothing is flushed and no ``on_disconnect`` fires.
+        Accessing ``_thread`` defensively keeps this tolerant of paho version
+        differences and injected fakes."""
+        if self.client is None:
+            return False
+        thread = getattr(self.client, "_thread", None)
+        if thread is None:
+            return False
+        is_alive = getattr(thread, "is_alive", None)
+        if is_alive is None:
+            return True
+        return bool(is_alive())
+
+    def _teardown_client(self) -> None:
+        if self.client is None:
+            return
+        try:
+            self.client.loop_stop()
+        except Exception as exc:
+            self.emit("mqtt_close_error", error=str(exc))
+        try:
+            self.client.disconnect()
+        except Exception as exc:
+            self.emit("mqtt_close_error", error=str(exc))
+        self.client = None
+        # Force discovery + command-topic resubscribe on the fresh connection.
+        self.announced.clear()
+        self._active_power_limit_announced.clear()
+
+    def ensure_connected(self) -> None:
+        """Rebuild the client if the network loop is no longer running.
+
+        Driven by the daemon's watchdog. A no-op while the loop is healthy, so
+        it never fights paho's own reconnect logic for transient drops — it
+        only acts when the loop thread is gone, which paho cannot recover."""
+        if not self.enabled:
+            return
+        if self.loop_is_running():
+            return
+        self.emit(
+            "mqtt_loop_restart",
+            host=self.config.host,
+            port=self.config.port,
+            reason="no_client" if self.client is None else "loop_dead",
+        )
+        self._teardown_client()
+        self.connect()
+
     def _on_connect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         event = "mqtt_connected" if reason_is_success(reason_code) else "mqtt_connect_failed"
         self.emit(event, host=self.config.host, port=self.config.port, reason=str(reason_code))
@@ -106,12 +160,7 @@ class MqttPublisher:
             self.emit("mqtt_command_handler_error", topic=topic, error=str(exc))
 
     def close(self) -> None:
-        if self.client is not None:
-            try:
-                self.client.loop_stop()
-                self.client.disconnect()
-            except Exception as exc:
-                self.emit("mqtt_close_error", error=str(exc))
+        self._teardown_client()
 
     def active_power_limit_command_topic(self, serial: str) -> str:
         return f"{self.config.topic_prefix}/{serial}/active_power_limit/set"

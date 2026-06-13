@@ -119,14 +119,32 @@ def sample_telemetry(serial: str = TEST_SERIAL, model: str | None = "M1-800-E") 
     )
 
 
+class FakeThread:
+    """Stand-in for paho's network-loop thread so loop_is_running() is testable."""
+
+    def __init__(self) -> None:
+        self._alive = True
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+
 class FakeMqttClient:
     def __init__(self, fail_connect: bool = False, publish_rc: int = 0) -> None:
         self.fail_connect = fail_connect
         self.publish_rc = publish_rc
         self.on_connect = None
         self.on_disconnect = None
+        self.on_message = None
         self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
         self.published: list[tuple[str, str, bool]] = []
+        # Mirrors paho: None until loop_start, a live thread after, None again
+        # after loop_stop. simulate_loop_death() leaves it set but not alive.
+        self._thread: FakeThread | None = None
+
+    def simulate_loop_death(self) -> None:
+        if self._thread is not None:
+            self._thread._alive = False
 
     def reconnect_delay_set(self, **kwargs: object) -> None:
         self.calls.append(("reconnect_delay_set", (), kwargs))
@@ -137,6 +155,9 @@ class FakeMqttClient:
     def will_set(self, *args: object, **kwargs: object) -> None:
         self.calls.append(("will_set", args, kwargs))
 
+    def subscribe(self, *args: object, **kwargs: object) -> None:
+        self.calls.append(("subscribe", args, kwargs))
+
     def connect_async(self, *args: object, **kwargs: object) -> None:
         self.calls.append(("connect_async", args, kwargs))
         if self.fail_connect:
@@ -144,9 +165,11 @@ class FakeMqttClient:
 
     def loop_start(self) -> None:
         self.calls.append(("loop_start", (), {}))
+        self._thread = FakeThread()
 
     def loop_stop(self) -> None:
         self.calls.append(("loop_stop", (), {}))
+        self._thread = None
 
     def disconnect(self) -> None:
         self.calls.append(("disconnect", (), {}))
@@ -1473,6 +1496,96 @@ class MqttPublisherTest(unittest.TestCase):
 
     def test_operating_state_metadata_uses_enum(self) -> None:
         self.assertEqual(metadata_for("operating_state"), (None, "enum", None))
+
+    def test_loop_is_running_true_after_connect_false_after_death(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"), {}, client_factory=lambda: client
+        )
+        self.assertFalse(publisher.loop_is_running())
+        publisher.connect()
+        self.assertTrue(publisher.loop_is_running())
+        client.simulate_loop_death()
+        self.assertFalse(publisher.loop_is_running())
+
+    def test_ensure_connected_is_noop_while_loop_alive(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {},
+            emit=lambda event, **fields: events.append((event, fields)),
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+        connect_calls_before = client.calls.count(("loop_start", (), {}))
+
+        publisher.ensure_connected()
+
+        self.assertEqual(client.calls.count(("loop_start", (), {})), connect_calls_before)
+        self.assertFalse(any(event == "mqtt_loop_restart" for event, _ in events))
+
+    def test_ensure_connected_rebuilds_dead_loop(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        clients = [FakeMqttClient(), FakeMqttClient()]
+        factory = iter(clients)
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {},
+            emit=lambda event, **fields: events.append((event, fields)),
+            client_factory=lambda: next(factory),
+        )
+        publisher.connect()
+        clients[0].simulate_loop_death()
+
+        publisher.ensure_connected()
+
+        restart = [fields for event, fields in events if event == "mqtt_loop_restart"]
+        self.assertEqual(len(restart), 1)
+        self.assertEqual(restart[0]["reason"], "loop_dead")
+        # Old client was torn down, new client took over and started its loop.
+        self.assertIn(("loop_stop", (), {}), clients[0].calls)
+        self.assertIs(publisher.client, clients[1])
+        self.assertIn(("loop_start", (), {}), clients[1].calls)
+        self.assertTrue(publisher.loop_is_running())
+        # The fresh connection republishes online once its on_connect fires.
+        publisher._on_connect(clients[1], None, None, "Success")
+        self.assertIn(("foxess_m1/status", "online", True), clients[1].published)
+
+    def test_ensure_connected_recovers_when_initial_connect_failed(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        clients = [FakeMqttClient(fail_connect=True), FakeMqttClient()]
+        factory = iter(clients)
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {},
+            emit=lambda event, **fields: events.append((event, fields)),
+            client_factory=lambda: next(factory),
+        )
+        publisher.connect()  # broker down: loop never starts
+        self.assertFalse(publisher.loop_is_running())
+
+        publisher.ensure_connected()
+
+        restart = [fields for event, fields in events if event == "mqtt_loop_restart"]
+        self.assertEqual(restart[0]["reason"], "loop_dead")
+        self.assertIs(publisher.client, clients[1])
+        self.assertTrue(publisher.loop_is_running())
+
+    def test_teardown_clears_discovery_dedup_so_it_is_resent(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {TEST_SERIAL: "Test Inverter"},
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+        publisher.publish(sample_telemetry())
+        self.assertIn(TEST_SERIAL, publisher.announced)
+
+        publisher._teardown_client()
+
+        self.assertNotIn(TEST_SERIAL, publisher.announced)
 
 
 class InstallerTest(unittest.TestCase):
