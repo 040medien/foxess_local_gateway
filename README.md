@@ -46,7 +46,7 @@ The Raspberry Pi runs four pieces:
 
 ## What You need
 - A Raspberry Pi (old Zero W is fine) in reception range of your inverter(s) and your home wifi
-- A recent wifi-only Fox ESS Solar inverter, e.g.
+- A recent wifi-only Fox ESS Solar inverter (also works with those connected to the Solakon Cloud), e.g.
   - M1-600-E
   - M1-800-E
   - M1-1000-E
