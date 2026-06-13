@@ -7,8 +7,6 @@ the FoxESS app and cloud are not needed at any point.
 
 ![FoxESS local gateway architecture](docs/images/illustration.png)
 
-![FoxESS M1 inverter with the Raspberry Pi gateway mounted alongside it](docs/images/installed_gateway.jpg)
-
 ## Why Use This
 
 - Writable `Active Power Limit` slider in Home Assistant for
@@ -24,6 +22,8 @@ the FoxESS app and cloud are not needed at any point.
 - No Home Assistant HACS Add-ons needed
 - Works with multiple inverters connected through the Pi AP at the same time, even if they use
   their own mesh network.
+
+![FoxESS M1 inverter with the Raspberry Pi gateway mounted alongside it](docs/images/installed_gateway.jpg)
 
 ## What This Does
 
