@@ -38,7 +38,7 @@ from .protocol import (
     product_info,
     registration_serial,
 )
-from .telemetry import decode_telemetry, fault_code_for, nonzero_u16_words
+from .telemetry import decode_telemetry, fault_code_for, is_known_fault_code, nonzero_u16_words
 
 
 FOXESS_CIPHERS = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
@@ -581,6 +581,7 @@ class Session:
                 session=self.session_id,
                 serial=self.serial or "",
                 code=code,
+                known=is_known_fault_code(code),
                 offsets={"100": offsets[0], "102": offsets[1], "104": offsets[2], "106": offsets[3]},
                 at=timestamp,
             )

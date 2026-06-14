@@ -6,16 +6,28 @@ from dataclasses import dataclass, asdict
 from typing import Any
 
 
-# Maps the four fault registers (offset 100, 102, 104, 106) to the
-# user-friendly 4-digit code(s) that FoxCloud reports for the same fault.
-# Each entry was built by correlating the live tuple our daemon captured
-# against the cloud's fault log timestamps for the same inverter.
+# Maps the SET of distinct nonzero fault-register tokens (the values seen at
+# offsets 100, 102, 104, 106) to the user-friendly 4-digit code(s) that
+# FoxCloud reports for the same fault. Each entry was built by correlating the
+# live values our daemon captured against the cloud's fault log timestamps for
+# the same inverter.
+#
+# The registers behave like a small FIFO/accumulator: across one fault episode
+# the inverter re-logs the same fault every ~90 s, so the same token repeats
+# across slots and the tuple "walks" (e.g. (4,0,0,0) -> (4,4,0,0) -> (4,4,4,0)
+# -> (4,4,4,4) for AC Under Voltage). Keying on the distinct-token set rather
+# than the ordered tuple collapses the whole episode to one rule, and is robust
+# to which frame happens to be captured first after a reconnect.
 #
 # Add new entries here as new fault types are observed.
-FAULT_CODE_MAP: dict[tuple[int, int, int, int], str] = {
+FAULT_CODE_MAP: dict[frozenset[int], str] = {
     # Confirmed against FoxCloud on 2026-06-06: AC Under Freq + AC Over Freq
     # fired simultaneously during a PV string disconnect.
-    (4, 20, 28, 24): "4156,4157",
+    frozenset({4, 20, 28, 24}): "4156,4157",
+    # Confirmed against FoxCloud on 2026-06-13: AC Under Voltage fired when the
+    # PV input cables were unplugged and replugged (15:07:45 CEST, matched to
+    # the cloud fault log to the second).
+    frozenset({4}): "4158",
 }
 
 
@@ -64,11 +76,17 @@ FAULT_CODE_NAMES: dict[str, str] = {
 
 def fault_code_for(offsets: tuple[int, int, int, int]) -> str:
     """Return the FoxCloud 4-digit code(s) for a fault tuple, or raw hex for unknowns."""
-    if not any(offsets):
+    tokens = frozenset(v for v in offsets if v)
+    if not tokens:
         return ""
-    if offsets in FAULT_CODE_MAP:
-        return FAULT_CODE_MAP[offsets]
+    if tokens in FAULT_CODE_MAP:
+        return FAULT_CODE_MAP[tokens]
     return "raw:" + "-".join(f"{v:02X}" for v in offsets)
+
+
+def is_known_fault_code(code: str) -> bool:
+    """True when a fault code was recognised — not empty and not raw hex."""
+    return bool(code) and not code.startswith("raw:")
 
 
 def fault_code_message_for(code_string: str) -> str:
