@@ -354,6 +354,18 @@ cloud stops receiving data and the app loses access. You can flip
 between the two by re-running the installer with the corresponding
 flag.
 
+### Can it read the inverter over Bluetooth instead of Wi-Fi?
+
+No. Bluetooth is only used once — to point the inverter at the Pi's
+Wi-Fi network (see the provisioning tool above). Live readings only ever
+travel over Wi-Fi: the inverter pushes a fresh telemetry frame about
+every 90 seconds, and only over its Wi-Fi link. Over Bluetooth it will
+answer a direct request for a small block of stored values, but those do
+not change while the inverter runs — they carry no live readings. This
+was tested directly — holding a Bluetooth connection open for several
+minutes, well past the 90-second mark, produced no live data — so Wi-Fi
+is the only source of live readings.
+
 ### How do multiple inverters share the AP?
 
 FoxESS microinverters form their own private mesh network — documented
@@ -435,6 +447,12 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-14
 
+- **Confirmed there is no way to get live readings over Bluetooth.**
+  Bluetooth answers a request for a small block of stored values, but
+  those do not change while the inverter runs, and the ~90-second live
+  telemetry is only ever sent over Wi-Fi — verified by holding a
+  Bluetooth connection open well past the 90-second mark with no live
+  data. See the FAQ. Wi-Fi remains the only source of live telemetry.
 - **Faster redeploys when only the daemon code changed.** The installer
   gained an `--app-only` option that updates the gateway software and
   restarts it in a couple of seconds, without touching the inverter Wi-Fi,
