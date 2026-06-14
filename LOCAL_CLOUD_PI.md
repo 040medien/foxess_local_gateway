@@ -68,10 +68,25 @@ Useful options:
 --dry-run
 --preview-dir /tmp/foxess-install-preview
 --skip-app-copy
+--app-only
 ```
 
 Fresh installs leave relay disabled. Re-running the installer preserves an
 existing `relay.enabled=true` setting unless `--no-relay` is passed.
+
+### Upgrading the daemon code
+
+A full re-run reconfigures the AP, nftables, and config. When you only changed
+the daemon code (for example testing a feature branch), use the fast path:
+
+```bash
+sudo ./installer/install_pi_zero_gateway.sh --app-only
+```
+
+It syncs the app tree into `/opt/foxess-local-cloud`, reinstalls Python
+dependencies only if `requirements.txt` changed, and restarts just the daemon —
+leaving the inverter AP, nftables redirect, and `/etc` config untouched. It
+requires an existing full install. Repeat redeploys take a couple of seconds.
 
 ## Connect The Inverter
 

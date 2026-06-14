@@ -435,6 +435,11 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-14
 
+- **Faster redeploys when only the daemon code changed.** The installer
+  gained an `--app-only` option that updates the gateway software and
+  restarts it in a couple of seconds, without touching the inverter Wi-Fi,
+  the network redirect, or your saved settings. The full installer is still
+  used for first-time setup and any change to the Wi-Fi or network setup.
 - **"AC Under Voltage" faults now show their name.** When the grid
   voltage drops too low (seen here after the inverter's input cables
   were unplugged and replugged), the fault used to appear as an
@@ -580,6 +585,13 @@ Installer dry-run without touching the system:
   --preview-dir /tmp/foxess-preview \
   --skip-app-copy \
   --non-interactive
+```
+
+Redeploy only the daemon code to an already-installed Pi (skips the Wi-Fi AP
+and config setup, restarts just the daemon — handy when iterating):
+
+```bash
+sudo ./installer/install_pi_zero_gateway.sh --app-only
 ```
 
 ## Uninstall
