@@ -267,8 +267,9 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(fault_code_for((4, 20, 28, 24)), "4156,4157")
 
     def test_fault_code_for_ac_under_voltage_tuple(self) -> None:
-        self.assertEqual(fault_code_for((4, 0, 0, 0)), "4158")
-        self.assertEqual(fault_code_message_for(fault_code_for((4, 0, 0, 0))), "AC Under Voltage")
+        for tuple_ in ((4, 0, 0, 0), (4, 4, 0, 0), (4, 4, 4, 0)):
+            self.assertEqual(fault_code_for(tuple_), "4158")
+            self.assertEqual(fault_code_message_for(fault_code_for(tuple_)), "AC Under Voltage")
 
     def test_fault_code_for_unknown_tuple_returns_raw_hex(self) -> None:
         result = fault_code_for((4, 33, 33, 0))

@@ -18,8 +18,12 @@ FAULT_CODE_MAP: dict[tuple[int, int, int, int], str] = {
     (4, 20, 28, 24): "4156,4157",
     # Confirmed against FoxCloud on 2026-06-13: AC Under Voltage fired when the
     # PV input cables were unplugged and replugged (15:07:45 CEST, matched to
-    # the cloud fault log to the second).
+    # the cloud fault log to the second). A single AC Under Voltage episode
+    # walks through several tuples as the inverter re-logs the fault every
+    # ~90 s, so all three observed during that window map to the same code.
     (4, 0, 0, 0): "4158",
+    (4, 4, 0, 0): "4158",
+    (4, 4, 4, 0): "4158",
 }
 
 
