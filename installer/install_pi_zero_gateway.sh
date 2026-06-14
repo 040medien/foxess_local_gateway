@@ -6,11 +6,16 @@ DRY_RUN=0
 NONINTERACTIVE=0
 PREVIEW_DIR=
 SKIP_APP_COPY=0
+APP_ONLY=0
 INSTALL_PREFIX=/opt/foxess-local-cloud
 CONFIG_DIR=/etc/foxess-local-cloud
 STATE_DIR=/var/lib/foxess-local-cloud
 LOG_DIR=/var/log/foxess-local-cloud
 WIFI_CREDENTIALS_FILE=$CONFIG_DIR/wifi-credentials.txt
+
+# Files excluded when copying the app tree into INSTALL_PREFIX. Shared by the
+# full install, the dry-run preview, and the --app-only fast path.
+APP_RSYNC_EXCLUDES=(--exclude .git --exclude .DS_Store --exclude '__pycache__' --exclude '*.pyc' --exclude build --exclude venv)
 
 AP_SSID=FoxESS-Local
 AP_PASSPHRASE=
@@ -56,6 +61,11 @@ Options:
   --dry-run                         Render files under ./build/pi-install-preview only
   --preview-dir DIR                 Dry-run output directory
   --skip-app-copy                   Dry-run only: render config without copying app tree
+  --app-only                        Fast redeploy of the daemon code only: sync the app
+                                    tree to the install prefix, refresh the venv, and
+                                    restart the daemon. Skips apt, the AP/hostapd/nftables
+                                    setup, and config regeneration. Requires an existing
+                                    full install; ideal for iterating on feature branches.
   --non-interactive                 Do not prompt; require passwords via flags/env
   --ap-ssid SSID                    Inverter-only Wi-Fi SSID
   --ap-passphrase PASSPHRASE        WPA2 passphrase, 8+ chars; generated if omitted
@@ -400,11 +410,56 @@ run() {
   fi
 }
 
+# Copy the repo into INSTALL_PREFIX, dropping any files no longer in the repo.
+sync_app_tree() {
+  rsync -a --delete "${APP_RSYNC_EXCLUDES[@]}" "$ROOT_DIR/" "$INSTALL_PREFIX/"
+}
+
+REQUIREMENTS_STAMP() { printf '%s/venv/.requirements.sha256' "$INSTALL_PREFIX"; }
+
+# Ensure INSTALL_PREFIX/venv exists with system site-packages (so it can see
+# python3-bleak without pip compiling dbus-fast on a Pi Zero W) and that the
+# Python dependencies are installed. Records the requirements hash so the
+# --app-only fast path can skip pip when nothing changed.
+ensure_venv() {
+  if [[ -d "$INSTALL_PREFIX/venv" ]] && ! grep -q '^include-system-site-packages = true' "$INSTALL_PREFIX/venv/pyvenv.cfg" 2>/dev/null; then
+    rm -rf "$INSTALL_PREFIX/venv"
+  fi
+  python3 -m venv --system-site-packages "$INSTALL_PREFIX/venv"
+  "$INSTALL_PREFIX/venv/bin/pip" install --upgrade pip
+  "$INSTALL_PREFIX/venv/bin/pip" install -r "$INSTALL_PREFIX/requirements.txt"
+  sha256sum "$INSTALL_PREFIX/requirements.txt" | awk '{print $1}' >"$(REQUIREMENTS_STAMP)"
+  chown -R root:root "$INSTALL_PREFIX"
+}
+
+# Lightweight venv handling for --app-only: rebuild the venv only if it is
+# missing/invalid, and (re)install dependencies only when requirements.txt
+# changed since the last install. Keeps repeat redeploys to a few seconds.
+refresh_venv_for_app_only() {
+  if [[ ! -x "$INSTALL_PREFIX/venv/bin/python" ]] \
+    || ! grep -q '^include-system-site-packages = true' "$INSTALL_PREFIX/venv/pyvenv.cfg" 2>/dev/null; then
+    ensure_venv
+    return 0
+  fi
+  local stamp current
+  stamp=$(REQUIREMENTS_STAMP)
+  current=$(sha256sum "$INSTALL_PREFIX/requirements.txt" | awk '{print $1}')
+  if [[ ! -f "$stamp" || "$(cat "$stamp")" != "$current" ]]; then
+    echo "requirements.txt changed; reinstalling dependencies"
+    "$INSTALL_PREFIX/venv/bin/pip" install -r "$INSTALL_PREFIX/requirements.txt"
+    echo "$current" >"$stamp"
+  else
+    echo "Dependencies unchanged; skipping pip"
+  fi
+  chown -R root:root "$INSTALL_PREFIX"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --preview-dir) PREVIEW_DIR=${2:?}; shift 2 ;;
     --skip-app-copy) SKIP_APP_COPY=1; shift ;;
+    --app-only) APP_ONLY=1; shift ;;
     --non-interactive) NONINTERACTIVE=1; shift ;;
     --ap-ssid) AP_SSID=${2:?}; shift 2 ;;
     --ap-passphrase) AP_PASSPHRASE=${2:?}; shift 2 ;;
@@ -443,6 +498,19 @@ fi
 
 if [[ "$DRY_RUN" != 1 && "$(id -u)" != 0 ]]; then
   die "run as root, or use --dry-run"
+fi
+
+if [[ "$APP_ONLY" = 1 ]]; then
+  [[ "$DRY_RUN" != 1 ]] || die "--app-only cannot be combined with --dry-run"
+  [[ -d "$INSTALL_PREFIX" && -f "$CONFIG_DIR/config.json" ]] \
+    || die "--app-only requires an existing full install; run without --app-only first"
+  echo "Redeploying FoxESS daemon code only (AP, nftables, and config left untouched)"
+  systemctl stop foxess-local-cloud.service 2>/dev/null || true
+  sync_app_tree
+  refresh_venv_for_app_only
+  systemctl restart foxess-local-cloud.service
+  systemctl --no-pager --full status foxess-local-cloud.service || true
+  exit 0
 fi
 
 preserve_existing_mqtt_config
@@ -563,32 +631,10 @@ fi
 
 if [[ "$DRY_RUN" = 1 && "$SKIP_APP_COPY" != 1 ]]; then
   mkdir -p "$(dest "${INSTALL_PREFIX#/}")"
-  rsync -a \
-    --exclude .git \
-    --exclude .DS_Store \
-    --exclude '__pycache__' \
-    --exclude '*.pyc' \
-    --exclude build \
-    --exclude venv \
-    "$ROOT_DIR/" "$(dest "${INSTALL_PREFIX#/}")/"
+  rsync -a "${APP_RSYNC_EXCLUDES[@]}" "$ROOT_DIR/" "$(dest "${INSTALL_PREFIX#/}")/"
 elif [[ "$DRY_RUN" != 1 ]]; then
-  rsync -a --delete \
-    --exclude .git \
-    --exclude .DS_Store \
-    --exclude '__pycache__' \
-    --exclude '*.pyc' \
-    --exclude build \
-    --exclude venv \
-    "$ROOT_DIR/" "$INSTALL_PREFIX/"
-  # The venv inherits system site-packages so it can see python3-bleak (and
-  # its dbus-fast C extension) without pip having to compile it on Pi Zero W.
-  if [[ -d "$INSTALL_PREFIX/venv" ]] && ! grep -q '^include-system-site-packages = true' "$INSTALL_PREFIX/venv/pyvenv.cfg" 2>/dev/null; then
-    rm -rf "$INSTALL_PREFIX/venv"
-  fi
-  python3 -m venv --system-site-packages "$INSTALL_PREFIX/venv"
-  "$INSTALL_PREFIX/venv/bin/pip" install --upgrade pip
-  "$INSTALL_PREFIX/venv/bin/pip" install -r "$INSTALL_PREFIX/requirements.txt"
-  chown -R root:root "$INSTALL_PREFIX"
+  sync_app_tree
+  ensure_venv
 fi
 
 if [[ "$DRY_RUN" != 1 && -f "$CONFIG_DIR/config.json" ]]; then
