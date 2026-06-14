@@ -20,7 +20,7 @@ from foxess_local_cloud.protocol import (
     registration_serial,
 )
 from foxess_local_cloud.server import FOXESS_UPSTREAM_CERT_SHA256, FoxessLocalCloud, Session, check_upstream_cert
-from foxess_local_cloud.telemetry import FAULT_CODE_NAMES, Telemetry, decode_telemetry, fault_code_for, fault_code_message_for, nonzero_u16_words, u32_wordswapped
+from foxess_local_cloud.telemetry import FAULT_CODE_NAMES, Telemetry, decode_telemetry, fault_code_for, fault_code_message_for, is_known_fault_code, nonzero_u16_words, u32_wordswapped
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -267,9 +267,20 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(fault_code_for((4, 20, 28, 24)), "4156,4157")
 
     def test_fault_code_for_ac_under_voltage_tuple(self) -> None:
-        for tuple_ in ((4, 0, 0, 0), (4, 4, 0, 0), (4, 4, 4, 0)):
+        # One AC Under Voltage episode walks the tuple as the fault re-logs;
+        # token-set matching covers every step including the full (4,4,4,4).
+        for tuple_ in ((4, 0, 0, 0), (4, 4, 0, 0), (4, 4, 4, 0), (4, 4, 4, 4)):
             self.assertEqual(fault_code_for(tuple_), "4158")
             self.assertEqual(fault_code_message_for(fault_code_for(tuple_)), "AC Under Voltage")
+
+    def test_fault_code_for_is_token_order_independent(self) -> None:
+        self.assertEqual(fault_code_for((24, 28, 20, 4)), "4156,4157")
+
+    def test_is_known_fault_code(self) -> None:
+        self.assertTrue(is_known_fault_code("4158"))
+        self.assertTrue(is_known_fault_code("4156,4157"))
+        self.assertFalse(is_known_fault_code("raw:04-00-00-00"))
+        self.assertFalse(is_known_fault_code(""))
 
     def test_fault_code_for_unknown_tuple_returns_raw_hex(self) -> None:
         result = fault_code_for((4, 33, 33, 0))
@@ -581,6 +592,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         fault_events = [fields for event, fields in events if event == "fault_observed"]
         self.assertEqual(len(fault_events), 1)
         self.assertEqual(fault_events[0]["code"], "4156,4157")
+        self.assertTrue(fault_events[0]["known"])
         self.assertEqual(fault_events[0]["offsets"], {"100": 4, "102": 20, "104": 28, "106": 24})
 
         # Frame 3: fault cleared → fault_cleared event

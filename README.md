@@ -439,7 +439,9 @@ history including refactors and internal scaffolding, see the git log.
   voltage drops too low (seen here after the inverter's input cables
   were unplugged and replugged), the fault used to appear as an
   unrecognised raw code. It now reads as "AC Under Voltage", matched to
-  the same name the FoxESS app shows.
+  the same name the FoxESS app shows, and keeps that name for the whole
+  fault rather than only the first moment. Any fault that still isn't
+  recognised is now clearly flagged in the logs so it can be added.
 
 ### 2026-06-13
 
