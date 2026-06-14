@@ -16,6 +16,10 @@ FAULT_CODE_MAP: dict[tuple[int, int, int, int], str] = {
     # Confirmed against FoxCloud on 2026-06-06: AC Under Freq + AC Over Freq
     # fired simultaneously during a PV string disconnect.
     (4, 20, 28, 24): "4156,4157",
+    # Confirmed against FoxCloud on 2026-06-13: AC Under Voltage fired when the
+    # PV input cables were unplugged and replugged (15:07:45 CEST, matched to
+    # the cloud fault log to the second).
+    (4, 0, 0, 0): "4158",
 }
 
 

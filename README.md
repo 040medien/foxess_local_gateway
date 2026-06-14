@@ -433,6 +433,14 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-06-14
+
+- **"AC Under Voltage" faults now show their name.** When the grid
+  voltage drops too low (seen here after the inverter's input cables
+  were unplugged and replugged), the fault used to appear as an
+  unrecognised raw code. It now reads as "AC Under Voltage", matched to
+  the same name the FoxESS app shows.
+
 ### 2026-06-13
 
 - **Sensors recover on their own after a broker hiccup.** Previously,
