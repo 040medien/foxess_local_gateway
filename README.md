@@ -51,20 +51,19 @@ The Raspberry Pi runs four pieces:
   - M1-800-E
   - M1-1000-E
   - M1-1200-E
-  - Q1-1600-E (not confirmed)
-  - Q1-2000-E (not confirmed)
-  - Q1-2400-E (not confirmed)
-  - Q1-2500-E (not confirmed)
-- Home Assistant with the Mosquitto Broker app
+  - Q1-1600-E  - Q1-2000-E  - Q1-2400-E  - Q1-2500-E- Home Assistant with the Mosquitto Broker app
 
 ## Tested
 
 Tested:
 
 - Raspberry Pi Zero W running Raspberry Pi OS Lite (Trixie).
-- FoxESS M1-800-E microinverter.
-- M1 two-string PV telemetry:
-  - PV power, voltage, and current for PV1/PV2.
+- FoxESS microinverters: M1-800-E (two PV strings) and Q1-2000-E
+  (four PV strings, PV1–PV4). The Q1 was provisioned from
+  never-commissioned over Bluetooth without the FoxESS app — reported
+  and confirmed by a community user.
+- Decoded telemetry (both models):
+  - PV power, voltage, and current per string.
   - AC power, voltage, current, and frequency.
   - Inverter temperature.
   - Lifetime generation and lifetime grid export.
@@ -74,9 +73,6 @@ Tested:
   - Mesh role (root or follower) and — for followers — the root
     inverter's serial, derived from the periodic role-declaration
     frames the firmware emits.
-- FoxESS Q1-2000-E microinverter, including four-string PV telemetry
-  (PV1–PV4), provisioned from never-commissioned via Bluetooth without
-  the FoxESS app. (Reported and confirmed by a community user.)
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
 - Local control: writable `Active Power Limit` HA entity and Modbus
