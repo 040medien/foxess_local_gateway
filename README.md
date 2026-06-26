@@ -1,6 +1,6 @@
-# FoxESS M1 Local Gateway
+# FoxESS M1/Q1 Local Gateway
 
-A Raspberry Pi gateway for FoxESS M1 (and potentially Q1) microinverters.
+A Raspberry Pi gateway for FoxESS M1 and Q1 microinverters.
 Provisions inverters directly over Bluetooth, decodes their local
 telemetry, and publishes it to MQTT with Home Assistant auto-discovery —
 the FoxESS app and cloud are not needed at any point.
