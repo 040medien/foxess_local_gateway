@@ -1,4 +1,4 @@
-"""BLE-based WiFi provisioning for FoxESS M1 inverters.
+"""BLE-based WiFi provisioning for FoxESS M1/Q1 inverters.
 
 Drives the same bytes a FoxCloud-compatible mobile app sends over Bluetooth
 LE, so the Pi can re-point an M1 at the local AP without needing the mobile
@@ -63,7 +63,7 @@ FN_COMMIT = 0xB1
 
 @dataclass(frozen=True)
 class DiscoveredInverter:
-    """An M1 inverter found by BLE advertising scan."""
+    """An M1/Q1 inverter found by BLE advertising scan."""
 
     address: str
     name: str

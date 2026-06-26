@@ -164,7 +164,7 @@ the install. You can also run the same flow any time later:
 sudo foxess-ble-provision
 ```
 
-This drops into an interactive loop: it scans for nearby M1 inverters,
+This drops into an interactive loop: it scans for nearby M1/Q1 inverters,
 shows them with their signal strength, and lets you pick which one(s)
 to provision. The Pi's AP credentials are loaded automatically from
 `/etc/foxess-local-cloud/wifi-credentials.txt`. The loop stays running
@@ -174,7 +174,7 @@ in one session.
 Other useful invocations:
 
 ```bash
-sudo foxess-ble-provision scan                            # list nearby M1s
+sudo foxess-ble-provision scan                            # list nearby M1/Q1 inverters
 sudo foxess-ble-provision networks AA:BB:CC:DD:EE:FF      # show WiFi networks visible to that inverter (read-only)
 sudo foxess-ble-provision provision <mac> --yes           # one-shot, scripted
 ```
@@ -324,7 +324,7 @@ accumulate more lifetime energy or hit error states.
 
 ### Is the decoded data complete?
 
-**For M1 inverters: yes.** Every field a regular owner cares about is
+**For M1 and Q1 inverters: yes.** Every field a regular owner cares about is
 decoded and published as a Home Assistant sensor: PV power, voltage,
 and current per string; AC power, voltage, current, and frequency;
 inverter temperature; operating state; lifetime generation and

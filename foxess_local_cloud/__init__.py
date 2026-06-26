@@ -1,2 +1,2 @@
-"""Local FoxESS M1 cloud emulator."""
+"""Local FoxESS M1/Q1 cloud emulator."""
 

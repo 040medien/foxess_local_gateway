@@ -1,5 +1,5 @@
 [Unit]
-Description=FoxESS M1 local cloud daemon
+Description=FoxESS M1/Q1 local cloud daemon
 Documentation=file:/opt/foxess-local-cloud/LOCAL_CLOUD_PI.md
 After=network-online.target foxess-pi-ap.service
 Wants=network-online.target foxess-pi-ap.service

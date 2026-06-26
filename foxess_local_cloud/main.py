@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the local FoxESS M1 cloud emulator."""
+"""Run the local FoxESS M1/Q1 cloud emulator."""
 
 from __future__ import annotations
 
