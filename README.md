@@ -86,6 +86,9 @@ Tested:
 
 Not yet tested (please let me know if you were able to test it):
 
+- The other FoxESS Q1 microinverters (Q1-1600-E, Q1-2400-E, Q1-2500-E).
+  They share the Q1-2000-E's four-string, single-phase design, so the same
+  decoding should apply, but they haven't been confirmed on real hardware.
 - Newer FoxESS single-phase **hybrid** inverters (battery-equipped models in
   the same single-phase family as the M1/Q1). The transport layer should be
   the same, so they may work for the existing fields out of the box, but the
