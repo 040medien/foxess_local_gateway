@@ -51,20 +51,17 @@ The Raspberry Pi runs four pieces:
   - M1-800-E
   - M1-1000-E
   - M1-1200-E
-  - Q1-1600-E (not confirmed)
-  - Q1-2000-E (not confirmed)
-  - Q1-2400-E (not confirmed)
-  - Q1-2500-E (not confirmed)
-- Home Assistant with the Mosquitto Broker app
+  - Q1-1600-E  - Q1-2000-E  - Q1-2400-E  - Q1-2500-E- Home Assistant with the Mosquitto Broker app
 
 ## Tested
 
 Tested:
 
-- Raspberry Pi Zero W running Raspberry Pi OS Lite (Trixie).
-- FoxESS M1-800-E microinverter.
-- M1 two-string PV telemetry:
-  - PV power, voltage, and current for PV1/PV2.
+- Raspberry Pi Zero W running Raspberry Pi OS Lite (Trixie or Bookworm).
+- FoxESS microinverters: M1-800-E (two PV strings) and Q1-2000-E
+  (four PV strings, PV1–PV4).
+- Decoded telemetry (both models):
+  - PV power, voltage, and current per string.
   - AC power, voltage, current, and frequency.
   - Inverter temperature.
   - Lifetime generation and lifetime grid export.
@@ -74,9 +71,9 @@ Tested:
   - Mesh role (root or follower) and — for followers — the root
     inverter's serial, derived from the periodic role-declaration
     frames the firmware emits.
-- FoxESS Q1-2000-E microinverter, including four-string PV telemetry
-  (PV1–PV4), provisioned from never-commissioned via Bluetooth without
-  the FoxESS app. (Reported and confirmed by a community user.)
+- Provisioning a never-commissioned inverter onto the gateway over
+  Bluetooth, without the FoxESS app — confirmed on the Q1-2000-E by a
+  community user.
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
 - Local control: writable `Active Power Limit` HA entity and Modbus
@@ -103,7 +100,7 @@ Not yet tested (please let me know if you were able to test it):
 
 ## Install On Raspberry Pi
 
-Start with Raspberry Pi OS Lite (Trixie). Configure normal Wi-Fi and SSH using Raspberry
+Start with Raspberry Pi OS Lite (Trixie or Bookworm). Configure normal Wi-Fi and SSH using Raspberry
 Pi Imager, then ssh into the pi and clone this repository:
 
 ```bash
