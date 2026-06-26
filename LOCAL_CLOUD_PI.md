@@ -106,7 +106,7 @@ configuration flow.
 sudo foxess-ble-provision
 ```
 
-This drops into an interactive loop: it scans for nearby M1 inverters,
+This drops into an interactive loop: it scans for nearby M1/Q1 inverters,
 shows them with signal strength, and provisions whichever ones you pick.
 The Pi AP SSID and passphrase are read from `wifi-credentials.txt`. The
 loop stays running until you press Enter to quit, so you can provision

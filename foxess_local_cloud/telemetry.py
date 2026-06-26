@@ -1,4 +1,4 @@
-"""Decode FoxESS M1 238-byte telemetry payloads."""
+"""Decode FoxESS M1/Q1 238-byte telemetry payloads."""
 
 from __future__ import annotations
 
