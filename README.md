@@ -51,7 +51,11 @@ The Raspberry Pi runs four pieces:
   - M1-800-E
   - M1-1000-E
   - M1-1200-E
-  - Q1-1600-E  - Q1-2000-E  - Q1-2400-E  - Q1-2500-E- Home Assistant with the Mosquitto Broker app
+  - Q1-1600-E
+  - Q1-2000-E
+  - Q1-2400-E
+  - Q1-2500-E
+- Home Assistant with the Mosquitto Broker app
 
 ## Tested
 
