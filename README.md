@@ -59,9 +59,7 @@ Tested:
 
 - Raspberry Pi Zero W running Raspberry Pi OS Lite (Trixie).
 - FoxESS microinverters: M1-800-E (two PV strings) and Q1-2000-E
-  (four PV strings, PV1–PV4). The Q1 was provisioned from
-  never-commissioned over Bluetooth without the FoxESS app — reported
-  and confirmed by a community user.
+  (four PV strings, PV1–PV4).
 - Decoded telemetry (both models):
   - PV power, voltage, and current per string.
   - AC power, voltage, current, and frequency.
@@ -73,6 +71,9 @@ Tested:
   - Mesh role (root or follower) and — for followers — the root
     inverter's serial, derived from the periodic role-declaration
     frames the firmware emits.
+- Provisioning a never-commissioned inverter onto the gateway over
+  Bluetooth, without the FoxESS app — confirmed on the Q1-2000-E by a
+  community user.
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
 - Local control: writable `Active Power Limit` HA entity and Modbus
