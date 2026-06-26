@@ -112,7 +112,7 @@ class FoxessLocalCloud:
         context.options |= ssl.OP_CIPHER_SERVER_PREFERENCE
         try:
             context.set_ecdh_curve("X25519")
-        except ValueError:
+        except (ValueError, ssl.SSLError):
             pass
         context.load_cert_chain(self.config.cert, self.config.key)
         return context
