@@ -57,7 +57,7 @@ The Raspberry Pi runs four pieces:
 
 Tested:
 
-- Raspberry Pi Zero W running Raspberry Pi OS Lite (Trixie).
+- Raspberry Pi Zero W running Raspberry Pi OS Lite (Trixie or Bookworm).
 - FoxESS microinverters: M1-800-E (two PV strings) and Q1-2000-E
   (four PV strings, PV1–PV4).
 - Decoded telemetry (both models):
@@ -100,7 +100,7 @@ Not yet tested (please let me know if you were able to test it):
 
 ## Install On Raspberry Pi
 
-Start with Raspberry Pi OS Lite (Trixie). Configure normal Wi-Fi and SSH using Raspberry
+Start with Raspberry Pi OS Lite (Trixie or Bookworm). Configure normal Wi-Fi and SSH using Raspberry
 Pi Imager, then ssh into the pi and clone this repository:
 
 ```bash
