@@ -21,6 +21,10 @@ def ascii_text(data: bytes) -> str:
     return "".join(chr(byte) if 32 <= byte <= 126 else "." for byte in data)
 
 
+def printable_ascii(data: bytes) -> str:
+    return "".join(chr(byte) for byte in data if 32 <= byte <= 126).strip()
+
+
 @dataclass(frozen=True)
 class Frame:
     start: bytes
@@ -125,7 +129,7 @@ def is_registration(frame: Frame) -> bool:
         frame.start == b"\x7e\x7e"
         and frame.payload_len == 28
         and len(frame.payload) >= 20
-        and frame.payload[:4] == b"\x01\x00\x01\x31"
+        and frame.payload[:4] in (b"\x01\x00\x01\x31", b"\x01\x00\x01\x30")
     )
 
 
@@ -162,7 +166,7 @@ def module_info(frame: Frame) -> str:
 def product_info(frame: Frame) -> dict[str, str]:
     if not is_product_info(frame):
         return {}
-    parts = [part.decode("ascii", errors="ignore").strip() for part in frame.payload.split(b"\x00")]
+    parts = [printable_ascii(part) for part in frame.payload.split(b"\x00")]
     strings = [part for part in parts if part and any(char.isalnum() for char in part)]
     model = next((part for part in strings if "-" in part), "")
     family = next((part for part in strings if part.startswith(("M", "Q")) and "-" not in part and not part.endswith("V180")), "")
