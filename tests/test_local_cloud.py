@@ -27,9 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_SERIAL = "TESTM1SERIAL001"
 
 
-def registration_frame(serial: str = TEST_SERIAL) -> bytes:
+def registration_frame(serial: str = TEST_SERIAL, marker: bytes = b"\x31") -> bytes:
     serial_bytes = serial.encode("ascii")
-    payload = b"\x01\x00\x01\x31" + bytes([len(serial_bytes)]) + serial_bytes + b"\x05v1.31\x00"
+    payload = b"\x01\x00\x01" + marker + bytes([len(serial_bytes)]) + serial_bytes + b"\x05v1.31\x00"
     payload = payload.ljust(28, b"\x00")
     return make_frame(b"\x7e\x7e", b"\x2a\x6a\x20\xe8", 0x8F, payload, b"\xe7\xe7")
 
@@ -220,6 +220,11 @@ class LocalCloudProtocolTest(unittest.TestCase):
         responses = [responder.response_for(frame) for frame in frames]
         self.assertEqual([len(response or b"") for response in responses], [18, 13, 14])
 
+    def test_q1_registration_variant_is_accepted(self) -> None:
+        frame = extract_frames(bytearray(registration_frame(marker=b"\x30")))[0]
+        self.assertTrue(is_registration(frame))
+        self.assertEqual(registration_serial(frame), TEST_SERIAL)
+
     def test_telemetry_decode_synthetic_frame(self) -> None:
         frame = extract_frames(bytearray(telemetry_frame()))[0]
         self.assertTrue(is_telemetry(frame))
@@ -262,6 +267,11 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(info["model"], "M1-800-E")
         self.assertEqual(info["family"], "M1")
         self.assertEqual(info["firmware"], "1.80")
+
+    def test_product_info_strips_control_bytes_from_model(self) -> None:
+        frame = extract_frames(bytearray(product_info_frame("\x01Q1-E")))[0]
+        info = product_info(frame)
+        self.assertEqual(info["model"], "Q1-E")
 
     def test_fault_code_for_known_tuple_returns_foxess_codes(self) -> None:
         self.assertEqual(fault_code_for((4, 20, 28, 24)), "4156,4157")

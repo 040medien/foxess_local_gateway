@@ -74,6 +74,9 @@ Tested:
   - Mesh role (root or follower) and — for followers — the root
     inverter's serial, derived from the periodic role-declaration
     frames the firmware emits.
+- FoxESS Q1-2000-E microinverter, including four-string PV telemetry
+  (PV1–PV4), provisioned from never-commissioned via Bluetooth without
+  the FoxESS app. (Reported and confirmed by a community user.)
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
 - Local control: writable `Active Power Limit` HA entity and Modbus
@@ -83,9 +86,6 @@ Tested:
 
 Not yet tested (please let me know if you were able to test it):
 
-- Brand-new, never-commissioned inverter setup without using the FoxESS app.
-- Q1 devices with four PV inputs. The decoder has model-aware PV3/PV4 support,
-  but this still needs validation on a real Q1 inverter.
 - Newer FoxESS single-phase **hybrid** inverters (battery-equipped models in
   the same single-phase family as the M1/Q1). The transport layer should be
   the same, so they may work for the existing fields out of the box, but the
@@ -444,6 +444,24 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-06-26
+
+- **Q1-2000-E now provisions and reports over Bluetooth.** A
+  never-commissioned Q1-2000-E sends a registration frame that differs
+  from the M1's in a single byte, which made `foxess-ble-provision` reject
+  it with "first frame not a registration". That registration variant is
+  now accepted, so the Q1 provisions onto the gateway Wi-Fi and streams
+  its full four-string PV telemetry. Thanks to the community report that
+  pinpointed the difference. (Confirmed on a real Q1-2000-E.)
+- **Inverter model name no longer shows stray control characters.** Some
+  inverters prefix the model string with a non-printable byte (the Q1
+  reported its model as `\x01Q1-E`); the name is now cleaned to plain text
+  (`Q1-E`) before it reaches MQTT and Home Assistant.
+- **Clearer diagnostics for unrecognised inverters.** When provisioning
+  rejects the first frame, the error now includes the leading payload
+  bytes alongside the function code, so a new model with yet another
+  registration variant can be identified from a single log line.
 
 ### 2026-06-14
 

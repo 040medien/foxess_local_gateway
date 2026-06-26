@@ -220,7 +220,9 @@ class _BleSession:
         registration = await self._await_frame(start=b"\x7e\x7e", timeout=15.0)
         if not p.is_registration(registration):
             raise ProvisioningError(
-                f"first frame not a registration (func={registration.func:#04x})"
+                "first frame not a registration "
+                f"(func={registration.func:#04x}, "
+                f"payload[:4]={registration.payload[:4].hex(' ')})"
             )
         serial = p.registration_serial(registration) or ""
         tail = derive_device_tail(registration)
