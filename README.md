@@ -453,6 +453,12 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-28
 
+- **TCP keepalive on the inverter connection.** The daemon now enables TCP
+  keepalive (default 30 s idle, configurable via
+  `inverter_tcp_keepalive_seconds`, 0 disables) on the inverter's connection, so
+  a marginal Wi-Fi link is kept warm and a dropped session is detected within
+  about a minute — which lets the `Active Power Limit` retry-on-reconnect kick in
+  promptly instead of waiting on a silently-dead socket.
 - **`Active Power Limit` setpoints survive a dropped connection.** If a setpoint
   can't be confirmed right now — typically because the inverter dropped its
   session on a weak link — the daemon remembers it and re-applies it once the

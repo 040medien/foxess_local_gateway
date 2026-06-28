@@ -5,6 +5,7 @@
   "key": "/var/lib/foxess-local-cloud/foxess-local-cloud-key.pem",
   "jsonl": "/var/log/foxess-local-cloud/events.jsonl",
   "publish_min_interval_seconds": ${PUBLISH_MIN_INTERVAL_SECONDS},
+  "inverter_tcp_keepalive_seconds": 30,
   "relay": {
     "enabled": ${RELAY_ENABLED},
     "fallback_to_original_destination": true,

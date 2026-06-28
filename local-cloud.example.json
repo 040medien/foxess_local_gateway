@@ -5,6 +5,7 @@
   "key": "runtime/foxess-local-cloud-key.pem",
   "jsonl": "runtime/foxess-local-cloud.jsonl",
   "publish_min_interval_seconds": 0,
+  "inverter_tcp_keepalive_seconds": 30,
   "relay": {
     "enabled": false,
     "fallback_to_original_destination": true,

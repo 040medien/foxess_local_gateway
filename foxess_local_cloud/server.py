@@ -198,6 +198,7 @@ class FoxessLocalCloud:
         self.next_session_id += 1
         peer = writer.get_extra_info("peername")
         self.logger.emit("connect", session=session_id, peer=str(peer))
+        apply_inverter_keepalive(writer, self.config.inverter_tcp_keepalive_seconds)
         session = Session(self, session_id)
         disconnect_reason = "eof"
         try:
@@ -704,6 +705,32 @@ class Session:
 
 def _iso8601(ts: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def apply_inverter_keepalive(writer: asyncio.StreamWriter, idle_seconds: int) -> None:
+    """Enable TCP keepalive on the inverter connection so a marginal Wi-Fi link
+    is kept warm and a dropped session is detected within ~a minute (feeding the
+    ActivePowerLimit retry-on-reconnect). ``idle_seconds <= 0`` disables it. The
+    per-idle/-interval/-count knobs are Linux-only; missing ones are skipped, so
+    this is a safe no-op on platforms (or sockets) that don't support them."""
+    if idle_seconds <= 0:
+        return
+    sock = writer.get_extra_info("socket")
+    if sock is None or not hasattr(sock, "setsockopt"):
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        tunables = (
+            ("TCP_KEEPIDLE", idle_seconds),
+            ("TCP_KEEPINTVL", min(idle_seconds, 10)),
+            ("TCP_KEEPCNT", 3),
+        )
+        for name, value in tunables:
+            opt = getattr(socket, name, None)
+            if opt is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, opt, value)
+    except OSError:
+        pass
 
 
 def original_destination_ip(writer: asyncio.StreamWriter) -> str | None:
