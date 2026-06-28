@@ -105,24 +105,35 @@ class FoxessLocalCloud:
         self.last_publish_by_serial: dict[str, float] = {}
         # ActivePowerLimit retry-on-reconnect state, keyed by serial. ``desired``
         # is the last setpoint Home Assistant asked for; ``applied`` is the last
-        # value the inverter actually acknowledged. A serial is "pending" while
-        # desired != applied, which is what a fresh session re-applies once it
-        # settles. Both outlive any single Session (recreated on reconnect), so
-        # they live on the app.
+        # value the inverter acknowledged (kept for observability). A serial is
+        # "pending" until *that specific desired command* is confirmed — tracked
+        # by ``_confirmed`` rather than by comparing values, because a later
+        # command can coincide with an older acknowledged value while an
+        # unconfirmed write in between left the inverter somewhere else. All
+        # outlive any single Session (recreated on reconnect), so they live on
+        # the app.
         self.desired_active_power_limit: dict[str, int] = {}
         self.applied_active_power_limit: dict[str, int] = {}
+        self._active_power_limit_confirmed: dict[str, bool] = {}
 
     def set_desired_active_power_limit(self, serial: str, percent: int) -> None:
+        # A new command is unconfirmed until its own write is acknowledged, even
+        # if it equals a previously applied value.
         self.desired_active_power_limit[serial] = percent
+        self._active_power_limit_confirmed[serial] = False
 
     def mark_active_power_limit_applied(self, serial: str, percent: int) -> None:
         self.applied_active_power_limit[serial] = percent
+        # Only the current desired being acknowledged clears the pending state;
+        # a late ack for a superseded value must not mark the new one confirmed.
+        if self.desired_active_power_limit.get(serial) == percent:
+            self._active_power_limit_confirmed[serial] = True
 
     def pending_active_power_limit(self, serial: str) -> int | None:
         """The setpoint awaiting (re)application for this serial, or None when
-        there is no desired value or it has already been acknowledged."""
+        there is no desired value or the latest command has been confirmed."""
         desired = self.desired_active_power_limit.get(serial)
-        if desired is None or self.applied_active_power_limit.get(serial) == desired:
+        if desired is None or self._active_power_limit_confirmed.get(serial, False):
             return None
         return desired
 

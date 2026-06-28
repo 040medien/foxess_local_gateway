@@ -1077,6 +1077,21 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         app.set_desired_active_power_limit("S1", 80)
         self.assertEqual(app.pending_active_power_limit("S1"), 80)
 
+    def test_unconfirmed_return_to_applied_value_stays_pending(self) -> None:
+        # Regression (Codex #46): 80 confirmed, then an unconfirmed write to 50,
+        # then an unconfirmed write back to 80 must stay pending — matching the
+        # old applied value must NOT be treated as already applied, or a write
+        # that actually landed at 50 in between would never be corrected.
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.set_desired_active_power_limit("S1", 80)
+        app.mark_active_power_limit_applied("S1", 80)
+        self.assertIsNone(app.pending_active_power_limit("S1"))
+        app.set_desired_active_power_limit("S1", 50)  # times out, never acked
+        app.set_desired_active_power_limit("S1", 80)  # can't be confirmed
+        self.assertEqual(app.pending_active_power_limit("S1"), 80)
+
     async def test_setpoint_confirmed_publishes_result_and_state(self) -> None:
         from foxess_local_cloud.config import InverterControl
 
