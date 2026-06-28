@@ -23,6 +23,16 @@ radio channel in practice. The installer keeps `wlan0` managed by
 NetworkManager, creates a virtual `ap0` interface for the inverter AP, and marks
 only `ap0` unmanaged.
 
+Because it is one radio, `wlan0` (home) and `ap0` (inverter) share a single
+channel — you cannot run the AP on 2.4 GHz while `wlan0` is associated to 5 GHz.
+FoxESS inverters are 2.4 GHz-only, so the home Wi-Fi must also be on the 2.4 GHz
+band. The installer auto-detects the channel from `wlan0` and refuses a 5 GHz
+channel; it also sets a `country_code` (auto-detected, or `--ap-country DE`) so
+channels 12/13 are usable. A Pi Zero W / Zero 2 W has a 2.4 GHz-only radio and
+avoids this entirely. If you must keep the home Wi-Fi on 5 GHz, give the Pi an
+Ethernet uplink (which frees the radio for a pure 2.4 GHz AP) or add a second
+Wi-Fi adapter.
+
 Raspberry Pi OS Lite is recommended.
 
 ## Install
@@ -63,6 +73,7 @@ Useful options:
 --ap-dhcp-start 192.168.50.20
 --ap-dhcp-end 192.168.50.80
 --ap-channel 6
+--ap-country DE
 --foxess-cloud-ip 203.0.113.10
 --foxess-cloud-host api.example.invalid
 --dry-run

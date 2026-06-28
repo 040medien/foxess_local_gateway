@@ -43,6 +43,18 @@ iface_mac() {
   "$IP" link show "$1" 2>/dev/null | awk '/link\/ether/ {print $2; exit}'
 }
 
+# A single-radio Pi shares one channel between the station interface and the AP.
+# FoxESS inverters are 2.4 GHz-only, so if the home Wi-Fi has put the radio on a
+# 5 GHz channel the AP cannot serve them. Warn loudly rather than fail, so the
+# diagnosis is visible in the journal if hostapd then misbehaves.
+warn_if_sta_5ghz() {
+  sta_ch=$("$IW" dev "$STA_IFACE" info 2>/dev/null | awk '/channel/ {print $2; exit}')
+  [ -n "$sta_ch" ] || return 0
+  if [ "$sta_ch" -gt 14 ] 2>/dev/null; then
+    log "WARNING: $STA_IFACE is on 5 GHz (channel $sta_ch); a single-radio Pi cannot also run a 2.4 GHz inverter AP. Move the home Wi-Fi to 2.4 GHz, use an Ethernet uplink, or add a second Wi-Fi adapter."
+  fi
+}
+
 # The AP interface shares one radio with the station interface, and the Wi-Fi
 # firmware demultiplexes received frames by destination MAC. If the AP vif
 # inherits the station's MAC verbatim, the kernel refuses to bring it up
@@ -137,6 +149,7 @@ stop_services() {
 case "${1:-start}" in
   start)
     "$SYSCTL" -w net.ipv4.ip_forward=1 >/dev/null
+    warn_if_sta_5ghz
     start_ap_iface
     start_nft
     start_services
