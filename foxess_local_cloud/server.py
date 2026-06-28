@@ -15,7 +15,7 @@ from typing import Any, TextIO
 
 from .cert import ensure_cert
 from .config import AppConfig
-from .local_control import LocalControl, normalize_device
+from .local_control import LocalControl, WRITE_CONFIRMED, normalize_device
 from .mqtt import MqttPublisher
 from .protocol import (
     BootstrapResponder,
@@ -257,8 +257,9 @@ class Session:
         if self.local_control is None or not self.serial:
             return
         address = self.app.config.inverter_control.active_power_limit_address
+        timeout = self.app.config.inverter_control.write_timeout_seconds
         try:
-            await self.local_control.write_register(address, percent)
+            result = await self.local_control.write_register(address, percent, timeout=timeout)
         except Exception as exc:
             self.app.logger.emit(
                 "active_power_limit_write_error",
@@ -267,11 +268,20 @@ class Session:
                 value=percent,
                 error=str(exc),
             )
+            self.app.mqtt.publish_active_power_limit_result(self.serial, "error")
             return
-        # Optimistic state publication so HA updates immediately. The next
-        # read of this register (either by us or by the cloud) will correct
-        # it if the inverter clamped/rejected the value.
-        self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
+        self.app.logger.emit(
+            "active_power_limit_write_result",
+            session=self.session_id,
+            serial=self.serial,
+            value=percent,
+            result=result,
+        )
+        self.app.mqtt.publish_active_power_limit_result(self.serial, result)
+        # Publish the optimistic setpoint state only when the inverter actually
+        # acknowledged the write; an unconfirmed write must not look applied.
+        if result == WRITE_CONFIRMED:
+            self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
 
     async def _read_active_power_limit_once(self) -> None:
         """Inject a one-shot read of the ActivePowerLimit register so HA can
@@ -487,6 +497,11 @@ class Session:
         if not frame.valid_crc:
             self.app.logger.emit("invalid_crc", session=self.session_id, serial=self.serial or "", bytes=len(frame.raw))
             return
+        # Confirm any ActivePowerLimit write awaiting this echoed response. Safe
+        # for every is-ours frame; a no-op for read responses. Runs for both
+        # local and relay paths (run_relay separately strips it from upstream).
+        if self.local_control is not None and self.local_control.is_our_frame(frame):
+            self.local_control.resolve_response(bytes(frame.device))
         if is_registration(frame):
             self.serial = registration_serial(frame)
             self.app.logger.emit("registration", session=self.session_id, serial=self.serial or "")

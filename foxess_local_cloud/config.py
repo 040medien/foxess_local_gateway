@@ -49,6 +49,11 @@ class InverterControl:
     # Holding-register address of the ActivePowerLimit setting (slave 1,
     # value in whole percent, mapped 2026-06-09).
     active_power_limit_address: int = 0xCA5A
+    # How long to wait for the inverter's Modbus write-response before
+    # reporting the write as unconfirmed (TIMEOUT). Measured round-trip on a
+    # healthy link is ~0.3 s; 3 s leaves generous headroom. 0 disables the wait
+    # (fire-and-forget).
+    write_timeout_seconds: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -134,6 +139,7 @@ def load_config(path: Path | None) -> AppConfig:
         inverter_control=InverterControl(
             enabled=bool(control_raw.get("enabled", True)),
             active_power_limit_address=int(control_raw.get("active_power_limit_address", 0xCA5A)),
+            write_timeout_seconds=float(control_raw.get("write_timeout_seconds", 3.0)),
         ),
     )
 

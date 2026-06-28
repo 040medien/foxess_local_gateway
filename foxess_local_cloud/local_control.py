@@ -68,6 +68,12 @@ INJECTED_COUNTER_START = 0xF000
 # request on a given stream must reuse the same one.
 INJECTED_SESSION_MARKER = 0xAA
 
+# Outcome of an ActivePowerLimit write, surfaced so Home Assistant / the
+# operator can tell whether a setpoint actually reached the inverter.
+WRITE_CONFIRMED = "confirmed"      # inverter echoed the write-response in time
+WRITE_TIMEOUT = "timeout"          # write sent, no response within the timeout
+WRITE_NO_CONNECTION = "no_connection"  # no inverter session to write to
+
 
 class LocalControl:
     """Per-session helper that injects Modbus requests into the inverter
@@ -89,6 +95,10 @@ class LocalControl:
         # Looked up (without removal) when classifying uplink frames as ours
         # for upstream-stripping purposes.
         self._outstanding: set[bytes] = set()
+        # Normalized device key -> Future resolved when the inverter's echoed
+        # write-response arrives, so write_register can confirm a setpoint
+        # actually landed (or time out).
+        self._pending_writes: dict[bytes, "asyncio.Future[bool]"] = {}
         # Last cloud marker we logged via observe_session_marker, kept for
         # dedup so the diagnostic event only fires when it changes.
         self._cloud_marker_seen: int | None = None
@@ -148,9 +158,14 @@ class LocalControl:
             return False
         return normalize_device(bytes(frame.device)) in self._outstanding
 
-    async def write_register(self, address: int, value: int) -> bytes | None:
-        """Inject a Modbus write-single-register request. Returns the device
-        bytes used, or None if no inverter writer is attached."""
+    async def write_register(self, address: int, value: int, *, timeout: float = 0.0) -> str:
+        """Inject a Modbus write-single-register request and report the outcome.
+
+        Returns ``WRITE_CONFIRMED`` if the inverter's echoed write-response
+        arrives within ``timeout`` seconds, ``WRITE_TIMEOUT`` if it does not,
+        or ``WRITE_NO_CONNECTION`` if there is no inverter writer attached.
+        ``timeout <= 0`` skips the wait (fire-and-forget) and returns
+        ``WRITE_CONFIRMED`` once the bytes are sent."""
         device = self._next_device(DEVICE_BYTE_WRITE)
         frame = build_modbus_write_single(device, address, value)
         self._emit(
@@ -161,8 +176,37 @@ class LocalControl:
             address_hex=f"0x{address:04x}",
             value=value,
         )
-        self._outstanding.add(normalize_device(device))
-        return await self._send(device, frame)
+        key = normalize_device(device)
+        self._outstanding.add(key)
+        # Register the awaiter BEFORE sending, so a fast response can't slip in
+        # between _send() and the wait.
+        future: "asyncio.Future[bool]" | None = None
+        if timeout > 0:
+            future = asyncio.get_running_loop().create_future()
+            self._pending_writes[key] = future
+        try:
+            sent = await self._send(device, frame)
+            if sent is None:
+                return WRITE_NO_CONNECTION
+            if future is None:
+                return WRITE_CONFIRMED
+            try:
+                await asyncio.wait_for(future, timeout)
+                return WRITE_CONFIRMED
+            except asyncio.TimeoutError:
+                return WRITE_TIMEOUT
+        finally:
+            self._pending_writes.pop(key, None)
+
+    def resolve_response(self, device: bytes) -> None:
+        """Mark the write awaiting this device's echoed response as confirmed.
+
+        Called when an uplink frame is recognized as ours. A no-op for frames
+        that aren't an outstanding write (e.g. read responses), so it is safe
+        to call for every ``is_our_frame`` frame."""
+        future = self._pending_writes.get(normalize_device(bytes(device)))
+        if future is not None and not future.done():
+            future.set_result(True)
 
     async def read_holding(self, address: int, count: int) -> bytes | None:
         """Inject a Modbus read-holding-registers request. Used to read back
