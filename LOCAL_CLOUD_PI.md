@@ -207,6 +207,29 @@ telemetry
 mqtt_connected
 ```
 
+### hostapd fails: "Name not unique on network"
+
+If `foxess-hostapd` will not start and the log shows:
+
+```text
+Could not set interface ap0 flags (UP): Name not unique on network
+nl80211 driver initialization failed.
+```
+
+the AP interface is sharing the station interface's MAC address. Both share one
+radio, and the Wi-Fi firmware sorts received frames to a virtual interface by
+destination MAC, so it refuses to bring up `ap0` with a duplicate address.
+`foxess-pi-ap` detects this and gives `ap0` a distinct MAC automatically (only
+when it collides — chips that already assign `ap0` a distinct MAC keep their
+existing BSSID). Confirm it took with:
+
+```bash
+ip link show wlan0   # link/ether b8:27:eb:...
+ip link show ap0     # link/ether ba:27:eb:... (must differ from wlan0)
+```
+
+If they still match, re-run `sudo foxess-pi-ap restart` and check the logs.
+
 ## MQTT And Friendly Names
 
 MQTT credentials can be supplied during install:
