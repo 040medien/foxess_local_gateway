@@ -103,6 +103,54 @@ class FoxessLocalCloud:
         self.mqtt = MqttPublisher(config.mqtt, config.devices, emit=self.logger.emit)
         self.next_session_id = 1
         self.last_publish_by_serial: dict[str, float] = {}
+        # ActivePowerLimit retry-on-reconnect state, keyed by serial. ``desired``
+        # is the last setpoint Home Assistant asked for; ``applied`` is the last
+        # value the inverter acknowledged (kept for observability). A serial is
+        # "pending" until *that specific desired command* is confirmed — tracked
+        # by ``_confirmed`` rather than by comparing values, because a later
+        # command can coincide with an older acknowledged value while an
+        # unconfirmed write in between left the inverter somewhere else. All
+        # outlive any single Session (recreated on reconnect), so they live on
+        # the app.
+        self.desired_active_power_limit: dict[str, int] = {}
+        self.applied_active_power_limit: dict[str, int] = {}
+        # Per-serial command generation. Each new setpoint bumps ``_gen``;
+        # ``_confirmed_gen`` records the highest generation whose own write was
+        # acknowledged. Confirmation is tied to the generation, not the percent,
+        # so that with concurrent writes (e.g. 80 -> 50 -> 80) an ack for the
+        # first 80 can't mark the latest 80 confirmed — otherwise a lost final
+        # write could leave the inverter stuck at the intervening value.
+        self._active_power_limit_gen: dict[str, int] = {}
+        self._active_power_limit_confirmed_gen: dict[str, int] = {}
+
+    def set_desired_active_power_limit(self, serial: str, percent: int) -> int:
+        """Record a new desired setpoint and return its command generation."""
+        self.desired_active_power_limit[serial] = percent
+        generation = self._active_power_limit_gen.get(serial, 0) + 1
+        self._active_power_limit_gen[serial] = generation
+        return generation
+
+    def current_active_power_limit_generation(self, serial: str) -> int:
+        return self._active_power_limit_gen.get(serial, 0)
+
+    def mark_active_power_limit_applied(self, serial: str, percent: int, generation: int) -> None:
+        """Record an acknowledged write for ``generation``. Only advances the
+        confirmed generation, so a late ack for a superseded command cannot
+        clear a newer pending setpoint."""
+        self.applied_active_power_limit[serial] = percent
+        if generation > self._active_power_limit_confirmed_gen.get(serial, 0):
+            self._active_power_limit_confirmed_gen[serial] = generation
+
+    def pending_active_power_limit(self, serial: str) -> int | None:
+        """The setpoint awaiting (re)application for this serial, or None when
+        there is no desired value or the latest command's write was acked."""
+        desired = self.desired_active_power_limit.get(serial)
+        if desired is None:
+            return None
+        confirmed = self._active_power_limit_confirmed_gen.get(serial, 0)
+        if confirmed >= self._active_power_limit_gen.get(serial, 0):
+            return None
+        return desired
 
     def ssl_context(self) -> ssl.SSLContext:
         ensure_cert(self.config.cert, self.config.key, self.config.force_cert)
@@ -257,6 +305,20 @@ class Session:
     async def _handle_active_power_limit_setpoint(self, percent: int) -> None:
         if self.local_control is None or not self.serial:
             return
+        # Record the desired value first so it survives an unconfirmed write and
+        # supersedes any older pending value, then attempt to apply it now. The
+        # returned generation ties this command's confirmation to this exact
+        # write, so a stale ack can't mark a newer setpoint applied.
+        generation = self.app.set_desired_active_power_limit(self.serial, percent)
+        await self._apply_active_power_limit(percent, generation=generation, source="setpoint")
+
+    async def _apply_active_power_limit(self, percent: int, *, generation: int, source: str) -> None:
+        """Write a setpoint and report the outcome. On a confirmed write, mark
+        that generation applied; the optimistic state is published only when the
+        confirmed write is still the latest command. An unconfirmed write leaves
+        the value pending for re-application on the next reconnect."""
+        if self.local_control is None or not self.serial:
+            return
         address = self.app.config.inverter_control.active_power_limit_address
         timeout = self.app.config.inverter_control.write_timeout_seconds
         try:
@@ -277,12 +339,36 @@ class Session:
             serial=self.serial,
             value=percent,
             result=result,
+            source=source,
         )
         self.app.mqtt.publish_active_power_limit_result(self.serial, result)
-        # Publish the optimistic setpoint state only when the inverter actually
-        # acknowledged the write; an unconfirmed write must not look applied.
+        # On an acknowledged write, record the generation. Publish the optimistic
+        # state only when this confirm is for the latest command, so a late ack
+        # for a superseded value can't make HA show a setpoint that isn't current.
         if result == WRITE_CONFIRMED:
-            self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
+            self.app.mark_active_power_limit_applied(self.serial, percent, generation)
+            if generation == self.app.current_active_power_limit_generation(self.serial):
+                self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
+
+    async def _settle_inverter_control(self) -> None:
+        """Run once the session has settled (first telemetry frame). Either
+        re-apply a setpoint an earlier session couldn't confirm (so curtailment
+        is self-healing across reconnects) OR read the current setpoint for HA —
+        never both, so we don't issue a read and a write back-to-back in our
+        Modbus stream. A pending re-apply takes priority; its own confirmation
+        publishes the state, making the one-shot read redundant there."""
+        pending = self.app.pending_active_power_limit(self.serial) if self.serial else None
+        if pending is None:
+            await self._read_active_power_limit_once()
+            return
+        generation = self.app.current_active_power_limit_generation(self.serial)
+        self.app.logger.emit(
+            "active_power_limit_reapply",
+            session=self.session_id,
+            serial=self.serial,
+            value=pending,
+        )
+        await self._apply_active_power_limit(pending, generation=generation, source="reapply")
 
     async def _read_active_power_limit_once(self) -> None:
         """Inject a one-shot read of the ActivePowerLimit register so HA can
@@ -556,7 +642,7 @@ class Session:
                 and self.local_control is not None
                 and self._inverter_control_command_registered
             ):
-                asyncio.create_task(self._read_active_power_limit_once())
+                asyncio.create_task(self._settle_inverter_control())
             self.last_telemetry_at = time.time()
         if is_modbus_read_response(frame):
             pdu = parse_modbus_read_response(frame)
