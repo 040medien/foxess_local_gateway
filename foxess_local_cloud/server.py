@@ -32,6 +32,7 @@ from .protocol import (
     is_registration,
     is_telemetry,
     mesh_peer_serial,
+    MODBUS_FN_WRITE_SINGLE,
     parse_modbus_command,
     parse_modbus_read_response,
     module_info,
@@ -501,7 +502,11 @@ class Session:
         # for every is-ours frame; a no-op for read responses. Runs for both
         # local and relay paths (run_relay separately strips it from upstream).
         if self.local_control is not None and self.local_control.is_our_frame(frame):
-            self.local_control.resolve_response(bytes(frame.device))
+            # Only a genuine write echo (function 0x06) counts as confirmed; a
+            # Modbus exception/NAK parses to {} (or a non-0x06 function) and is
+            # reported as rejected, so a refused setpoint never looks applied.
+            confirmed = parse_modbus_command(frame).get("function") == MODBUS_FN_WRITE_SINGLE
+            self.local_control.resolve_response(bytes(frame.device), confirmed=confirmed)
         if is_registration(frame):
             self.serial = registration_serial(frame)
             self.app.logger.emit("registration", session=self.session_id, serial=self.serial or "")

@@ -70,9 +70,10 @@ INJECTED_SESSION_MARKER = 0xAA
 
 # Outcome of an ActivePowerLimit write, surfaced so Home Assistant / the
 # operator can tell whether a setpoint actually reached the inverter.
-WRITE_CONFIRMED = "confirmed"      # inverter echoed the write-response in time
+WRITE_CONFIRMED = "confirmed"      # inverter echoed a successful write-response in time
+WRITE_REJECTED = "rejected"        # inverter answered, but with a Modbus exception/NAK
 WRITE_TIMEOUT = "timeout"          # write sent, no response within the timeout
-WRITE_NO_CONNECTION = "no_connection"  # no inverter session to write to
+WRITE_NO_CONNECTION = "no_connection"  # no (usable) inverter session to write to
 
 
 class LocalControl:
@@ -191,22 +192,24 @@ class LocalControl:
             if future is None:
                 return WRITE_CONFIRMED
             try:
-                await asyncio.wait_for(future, timeout)
-                return WRITE_CONFIRMED
+                confirmed = await asyncio.wait_for(future, timeout)
+                return WRITE_CONFIRMED if confirmed else WRITE_REJECTED
             except asyncio.TimeoutError:
                 return WRITE_TIMEOUT
         finally:
             self._pending_writes.pop(key, None)
 
-    def resolve_response(self, device: bytes) -> None:
-        """Mark the write awaiting this device's echoed response as confirmed.
+    def resolve_response(self, device: bytes, *, confirmed: bool = True) -> None:
+        """Settle the write awaiting this device's echoed response.
 
-        Called when an uplink frame is recognized as ours. A no-op for frames
+        ``confirmed`` is True for a successful write echo and False for a
+        Modbus exception/NAK, so a rejected write is not reported as applied.
+        Called when an uplink frame is recognized as ours; a no-op for frames
         that aren't an outstanding write (e.g. read responses), so it is safe
         to call for every ``is_our_frame`` frame."""
         future = self._pending_writes.get(normalize_device(bytes(device)))
         if future is not None and not future.done():
-            future.set_result(True)
+            future.set_result(confirmed)
 
     async def read_holding(self, address: int, count: int) -> bytes | None:
         """Inject a Modbus read-holding-registers request. Used to read back
@@ -228,7 +231,12 @@ class LocalControl:
 
     async def _send(self, device: bytes, frame: bytes) -> bytes | None:
         writer = self.inverter_writer
-        if writer is None:
+        # A writer that exists but is closing belongs to a session the inverter
+        # has already dropped (the handler still points at the old Session until
+        # the inverter reconnects). Treat it as no connection rather than
+        # writing into a closing transport and reporting a false confirm/timeout.
+        is_closing = getattr(writer, "is_closing", None)
+        if writer is None or (callable(is_closing) and is_closing()):
             self._emit(
                 "injected_drop",
                 session=self._session_id,
