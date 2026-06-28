@@ -457,6 +457,13 @@ history including refactors and internal scaffolding, see the git log.
   concurrent Wi-Fi + AP works on those boards too. Chips that already give
   `ap0` a distinct MAC are left untouched, so existing gateways keep their
   AP BSSID and provisioned inverters do not have to re-associate. (Fixes #39.)
+- **MQTT defaults tuned for the ~90 s telemetry cadence.** `retain` now
+  defaults to on, so the last reading survives in the broker and Home
+  Assistant entities keep their value across HA restarts instead of
+  showing nothing until the next push. `expire_after_seconds` now
+  defaults to 300 (was 180) so normal timing jitter no longer briefly
+  flaps entities to "unavailable" — they still go unavailable if the
+  inverter is genuinely offline. Both stay overridable in the config.
 
 ### 2026-06-26
 
