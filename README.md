@@ -446,6 +446,16 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-06-28
+
+- **MQTT defaults tuned for the ~90 s telemetry cadence.** `retain` now
+  defaults to on, so the last reading survives in the broker and Home
+  Assistant entities keep their value across HA restarts instead of
+  showing nothing until the next push. `expire_after_seconds` now
+  defaults to 300 (was 180) so normal timing jitter no longer briefly
+  flaps entities to "unavailable" — they still go unavailable if the
+  inverter is genuinely offline. Both stay overridable in the config.
+
 ### 2026-06-26
 
 - **Q1-2000-E now provisions and reports over Bluetooth.** A
