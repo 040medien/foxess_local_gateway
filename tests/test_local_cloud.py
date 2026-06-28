@@ -986,6 +986,97 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         nak = extract_frames(bytearray(make_frame(b"\x7f\x7f", device, COMMAND_ENVELOPE_FUNC, nak_pdu, b"\xf7\xf7")))[0]
         self.assertNotEqual(parse_modbus_command(nak).get("function"), MODBUS_FN_WRITE_SINGLE)
 
+    async def test_setpoint_without_connection_stays_pending(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = "S1"
+        # No inverter writer attached -> the write returns no_connection.
+        await session._handle_active_power_limit_setpoint(50)
+        self.assertEqual(app.desired_active_power_limit.get("S1"), 50)
+        self.assertEqual(app.applied_active_power_limit.get("S1"), None)
+        self.assertEqual(app.pending_active_power_limit("S1"), 50)
+
+    async def test_pending_setpoint_reapplied_and_confirmed(self) -> None:
+        import asyncio
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import extract_frames
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        # An earlier session left a setpoint pending.
+        app.set_desired_active_power_limit("S1", 60)
+        self.assertEqual(app.pending_active_power_limit("S1"), 60)
+
+        session = Session(app, 2)
+        session.serial = "S1"
+        writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+        task = asyncio.create_task(session._apply_active_power_limit(60, source="reapply"))
+        for _ in range(20):
+            if writer.writes:
+                break
+            await asyncio.sleep(0)
+        frame = extract_frames(bytearray(writer.writes[0]))[0]
+        session.local_control.resolve_response(bytes(frame.device), confirmed=True)  # type: ignore[union-attr]
+        await task
+        self.assertEqual(app.applied_active_power_limit.get("S1"), 60)
+        self.assertIsNone(app.pending_active_power_limit("S1"))
+
+    async def test_settle_reapplies_pending_setpoint(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        app.set_desired_active_power_limit("S1", 70)  # pending
+        session = Session(app, 3)
+        session.serial = "S1"
+        calls: list[tuple[int, str]] = []
+
+        async def fake_read() -> None:
+            return None
+
+        async def fake_apply(percent: int, *, source: str) -> None:
+            calls.append((percent, source))
+
+        session._read_active_power_limit_once = fake_read  # type: ignore[method-assign]
+        session._apply_active_power_limit = fake_apply  # type: ignore[method-assign]
+        await session._settle_inverter_control()
+        self.assertEqual(calls, [(70, "reapply")])
+
+    async def test_settle_skips_reapply_when_already_applied(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        app.set_desired_active_power_limit("S1", 70)
+        app.mark_active_power_limit_applied("S1", 70)  # confirmed -> not pending
+        session = Session(app, 4)
+        session.serial = "S1"
+        calls: list[tuple[int, str]] = []
+
+        async def fake_read() -> None:
+            return None
+
+        async def fake_apply(percent: int, *, source: str) -> None:
+            calls.append((percent, source))
+
+        session._read_active_power_limit_once = fake_read  # type: ignore[method-assign]
+        session._apply_active_power_limit = fake_apply  # type: ignore[method-assign]
+        await session._settle_inverter_control()
+        self.assertEqual(calls, [])
+
+    def test_newer_setpoint_supersedes_pending(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.set_desired_active_power_limit("S1", 50)
+        self.assertEqual(app.pending_active_power_limit("S1"), 50)
+        app.set_desired_active_power_limit("S1", 80)
+        self.assertEqual(app.pending_active_power_limit("S1"), 80)
+
     async def test_setpoint_confirmed_publishes_result_and_state(self) -> None:
         from foxess_local_cloud.config import InverterControl
 

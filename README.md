@@ -453,6 +453,12 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-28
 
+- **`Active Power Limit` setpoints survive a dropped connection.** If a setpoint
+  can't be confirmed right now — typically because the inverter dropped its
+  session on a weak link — the daemon remembers it and re-applies it once the
+  inverter reconnects and settles, so curtailment is self-healing instead of
+  silently lost. The latest setpoint always wins, and a confirmed write clears
+  the pending state so it isn't re-sent on every reconnect. (Towards #43.)
 - **`Active Power Limit` writes are now confirmed.** Instead of fire-and-forget,
   the daemon waits for the inverter's Modbus acknowledgement (round-trip is
   ~0.3 s on a healthy link) and reports the outcome on

@@ -330,6 +330,12 @@ What it does on the wire:
   diagnostic sensor. The setpoint state is only updated on `confirmed`, so a
   control loop (e.g. Nulleinspeisung from your own fast power source) can tell
   whether a curtailment actually landed. See issue #43.
+- Re-applies a setpoint that couldn't be confirmed. If a write returns
+  anything but `confirmed` (typically `no_connection` when the inverter has
+  dropped its session on a weak link), the desired value is kept and
+  automatically re-sent once the inverter reconnects and its session settles
+  (first telemetry frame). The latest setpoint wins, and a confirmed write
+  stops the retry, so it isn't re-sent on every reconnect.
 - Each injected request uses a 4-byte envelope device field with
   byte[3] = `0xAA` (our self-chosen transaction-stream marker); the
   inverter accepts it in parallel with the cloud's marker, and the

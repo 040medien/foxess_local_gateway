@@ -103,6 +103,28 @@ class FoxessLocalCloud:
         self.mqtt = MqttPublisher(config.mqtt, config.devices, emit=self.logger.emit)
         self.next_session_id = 1
         self.last_publish_by_serial: dict[str, float] = {}
+        # ActivePowerLimit retry-on-reconnect state, keyed by serial. ``desired``
+        # is the last setpoint Home Assistant asked for; ``applied`` is the last
+        # value the inverter actually acknowledged. A serial is "pending" while
+        # desired != applied, which is what a fresh session re-applies once it
+        # settles. Both outlive any single Session (recreated on reconnect), so
+        # they live on the app.
+        self.desired_active_power_limit: dict[str, int] = {}
+        self.applied_active_power_limit: dict[str, int] = {}
+
+    def set_desired_active_power_limit(self, serial: str, percent: int) -> None:
+        self.desired_active_power_limit[serial] = percent
+
+    def mark_active_power_limit_applied(self, serial: str, percent: int) -> None:
+        self.applied_active_power_limit[serial] = percent
+
+    def pending_active_power_limit(self, serial: str) -> int | None:
+        """The setpoint awaiting (re)application for this serial, or None when
+        there is no desired value or it has already been acknowledged."""
+        desired = self.desired_active_power_limit.get(serial)
+        if desired is None or self.applied_active_power_limit.get(serial) == desired:
+            return None
+        return desired
 
     def ssl_context(self) -> ssl.SSLContext:
         ensure_cert(self.config.cert, self.config.key, self.config.force_cert)
@@ -257,6 +279,18 @@ class Session:
     async def _handle_active_power_limit_setpoint(self, percent: int) -> None:
         if self.local_control is None or not self.serial:
             return
+        # Record the desired value first so it survives an unconfirmed write and
+        # supersedes any older pending value, then attempt to apply it now.
+        self.app.set_desired_active_power_limit(self.serial, percent)
+        await self._apply_active_power_limit(percent, source="setpoint")
+
+    async def _apply_active_power_limit(self, percent: int, *, source: str) -> None:
+        """Write a setpoint and report the outcome. On a confirmed write, mark
+        it applied (clearing any pending state) and publish the optimistic
+        state; an unconfirmed write leaves the value pending for re-application
+        on the next reconnect and does not publish state."""
+        if self.local_control is None or not self.serial:
+            return
         address = self.app.config.inverter_control.active_power_limit_address
         timeout = self.app.config.inverter_control.write_timeout_seconds
         try:
@@ -277,12 +311,32 @@ class Session:
             serial=self.serial,
             value=percent,
             result=result,
+            source=source,
         )
         self.app.mqtt.publish_active_power_limit_result(self.serial, result)
         # Publish the optimistic setpoint state only when the inverter actually
         # acknowledged the write; an unconfirmed write must not look applied.
         if result == WRITE_CONFIRMED:
+            self.app.mark_active_power_limit_applied(self.serial, percent)
             self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
+
+    async def _settle_inverter_control(self) -> None:
+        """Run once the session has settled (first telemetry frame): read the
+        current setpoint for HA, then re-apply a setpoint that an earlier
+        session couldn't confirm (the inverter dropped its connection), so
+        curtailment is self-healing across reconnects."""
+        await self._read_active_power_limit_once()
+        if not self.serial:
+            return
+        pending = self.app.pending_active_power_limit(self.serial)
+        if pending is not None:
+            self.app.logger.emit(
+                "active_power_limit_reapply",
+                session=self.session_id,
+                serial=self.serial,
+                value=pending,
+            )
+            await self._apply_active_power_limit(pending, source="reapply")
 
     async def _read_active_power_limit_once(self) -> None:
         """Inject a one-shot read of the ActivePowerLimit register so HA can
@@ -556,7 +610,7 @@ class Session:
                 and self.local_control is not None
                 and self._inverter_control_command_registered
             ):
-                asyncio.create_task(self._read_active_power_limit_once())
+                asyncio.create_task(self._settle_inverter_control())
             self.last_telemetry_at = time.time()
         if is_modbus_read_response(frame):
             pdu = parse_modbus_read_response(frame)
