@@ -45,7 +45,12 @@ The Raspberry Pi runs four pieces:
 
 
 ## What You need
-- A Raspberry Pi (old Zero W is fine) in reception range of your inverter(s) and your home wifi
+- A Raspberry Pi in range of your inverter(s) and your home Wi-Fi. A **Pi Zero W
+  or Zero 2 W is recommended** — their Wi-Fi is 2.4 GHz-only, the same band the
+  inverters use, so the one radio always shares 2.4 GHz between your home network
+  and the inverter AP and setup just works. Newer dual-band models (3B+/4/5) also
+  work, but the Pi's home Wi-Fi must be on the 2.4 GHz band — otherwise use a
+  network cable for the Pi's internet.
 - A recent wifi-only Fox ESS Solar inverter (also works with those connected to the Solakon Cloud), e.g.
   - M1-600-E
   - M1-800-E
@@ -448,6 +453,14 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-28
 
+- **AP is now kept on 2.4 GHz, with a regulatory country code.** FoxESS
+  inverters are 2.4 GHz-only, and a single-radio Pi shares one channel between
+  the home Wi-Fi and the inverter AP. The installer now rejects a 5 GHz AP
+  channel with clear guidance instead of building an AP the inverter can't join,
+  adds a `country_code` (new `--ap-country`, auto-detected from the system
+  regdomain) so channels 12/13 work, and `foxess-pi-ap` warns if the home Wi-Fi
+  is on 5 GHz. A **Pi Zero W / Zero 2 W** (2.4 GHz-only radio) is now the
+  recommended hardware because it sidesteps the band mismatch entirely.
 - **AP interface now gets its own MAC address when it needs one.** On some
   Raspberry Pi Wi-Fi chips the access-point interface (`ap0`) came up sharing
   the station interface's MAC, and hostapd failed to start with

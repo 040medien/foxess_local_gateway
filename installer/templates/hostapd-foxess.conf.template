@@ -2,6 +2,7 @@ ctrl_interface=/var/run/hostapd
 ctrl_interface_group=0
 interface=${AP_IFACE}
 driver=nl80211
+${HOSTAPD_COUNTRY_LINES}
 ssid=${AP_SSID}
 hw_mode=g
 channel=${AP_CHANNEL}

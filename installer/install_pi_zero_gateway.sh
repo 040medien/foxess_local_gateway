@@ -28,6 +28,7 @@ AP_DHCP_START=192.168.50.20
 AP_DHCP_END=192.168.50.80
 AP_DHCP_LEASE=12h
 AP_CHANNEL=auto
+AP_COUNTRY=auto
 MQTT_HOST=
 MQTT_HOST_SET=0
 MQTT_PORT=1883
@@ -74,7 +75,12 @@ Options:
   --ap-dhcp-start IP                DHCP range start, default 192.168.50.20
   --ap-dhcp-end IP                  DHCP range end, default 192.168.50.80
   --ap-dhcp-lease LEASE             DHCP lease time, default 12h
-  --ap-channel CHANNEL|auto         Hostapd channel; auto reads current wlan0 channel
+  --ap-channel CHANNEL|auto         Hostapd 2.4 GHz channel (1-13); auto reads
+                                    current wlan0 channel. 5 GHz channels are
+                                    rejected (inverters are 2.4 GHz-only).
+  --ap-country CC|auto              Regulatory country code, e.g. DE; auto reads
+                                    the system regdomain. Needed for channels
+                                    12/13.
   --sta-iface IFACE                 Upstream Wi-Fi interface, default wlan0
   --ap-iface IFACE                  Virtual AP interface, default ap0
   --mqtt-host HOST                  Enable MQTT publishing to this host
@@ -469,6 +475,7 @@ while [[ $# -gt 0 ]]; do
     --ap-dhcp-end) AP_DHCP_END=${2:?}; shift 2 ;;
     --ap-dhcp-lease) AP_DHCP_LEASE=${2:?}; shift 2 ;;
     --ap-channel) AP_CHANNEL=${2:?}; shift 2 ;;
+    --ap-country) AP_COUNTRY=${2:?}; shift 2 ;;
     --sta-iface) STA_IFACE=${2:?}; shift 2 ;;
     --ap-iface) AP_IFACE=${2:?}; shift 2 ;;
     --mqtt-host) MQTT_HOST=${2:?}; MQTT_HOST_SET=1; shift 2 ;;
@@ -538,6 +545,26 @@ if [[ "$AP_CHANNEL" = auto ]]; then
   AP_CHANNEL=$({ iw dev "$STA_IFACE" info 2>/dev/null || true; } | awk '/channel/ {print $2; exit}')
   AP_CHANNEL=${AP_CHANNEL:-6}
 fi
+# FoxESS inverters are 2.4 GHz-only, and a single-radio Pi shares one channel
+# between the home Wi-Fi (STA) and the inverter AP. A 5 GHz channel here cannot
+# serve the inverter, so fail fast with guidance instead of building a broken AP.
+[[ "$AP_CHANNEL" =~ ^[0-9]+$ ]] || die "AP channel must be a number (1-13) or 'auto'"
+if (( AP_CHANNEL < 1 || AP_CHANNEL > 14 )); then
+  die "AP channel $AP_CHANNEL is a 5 GHz channel. FoxESS inverters are 2.4 GHz-only, and a single-radio Pi shares one channel between $STA_IFACE and the inverter AP. Put the Pi's home Wi-Fi on the 2.4 GHz band (channels 1-13), use an Ethernet uplink, or add a second Wi-Fi adapter. Override with --ap-channel <1-13> only if you know the radio can serve 2.4 GHz."
+fi
+
+# Regulatory country: needed for 2.4 GHz channels 12/13 and correct TX power.
+if [[ "$AP_COUNTRY" = auto ]]; then
+  AP_COUNTRY=$({ iw reg get 2>/dev/null || true; } | awk '/^country/ {gsub(/:/,"",$2); print $2; exit}')
+  [[ "$AP_COUNTRY" = "00" ]] && AP_COUNTRY=""
+fi
+if [[ -n "$AP_COUNTRY" ]]; then
+  [[ "$AP_COUNTRY" =~ ^[A-Za-z][A-Za-z]$ ]] || die "AP country must be a 2-letter code (e.g. DE), 'auto', or empty"
+  AP_COUNTRY=$(printf '%s' "$AP_COUNTRY" | tr '[:lower:]' '[:upper:]')
+  HOSTAPD_COUNTRY_LINES=$(printf 'country_code=%s\nieee80211d=1' "$AP_COUNTRY")
+else
+  HOSTAPD_COUNTRY_LINES=""
+fi
 
 AP_SUBNET=$(validate_ipv4_subnet)
 AP_CIDR="$AP_ADDRESS/$AP_PREFIX"
@@ -550,7 +577,7 @@ MQTT_PASSWORD_JSON=$(json_string_or_null "$MQTT_PASSWORD")
 RELAY_UPSTREAMS_JSON=$(json_relay_upstreams)
 DEVICES_JSON=$(existing_devices_json "${FOXESS_EXISTING_CONFIG:-$CONFIG_DIR/config.json}")
 DNSMASQ_ADDRESS_LINES=$(dnsmasq_address_lines)
-export AP_SSID AP_PASSPHRASE AP_PASSPHRASE_GENERATED AP_IFACE STA_IFACE AP_ADDRESS AP_CIDR AP_SUBNET AP_CHANNEL
+export AP_SSID AP_PASSPHRASE AP_PASSPHRASE_GENERATED AP_IFACE STA_IFACE AP_ADDRESS AP_CIDR AP_SUBNET AP_CHANNEL HOSTAPD_COUNTRY_LINES
 export AP_DHCP_START AP_DHCP_END AP_DHCP_LEASE FOXESS_CLOUD_IPS ENABLE_NAT ENABLE_REDIRECT
 export DAEMON_PORT=14431 MQTT_HOST MQTT_PORT MQTT_USERNAME_JSON MQTT_PASSWORD_JSON
 export PUBLISH_MIN_INTERVAL_SECONDS RELAY_ENABLED RELAY_UPSTREAMS_JSON DNSMASQ_ADDRESS_LINES
