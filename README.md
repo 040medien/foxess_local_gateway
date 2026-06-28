@@ -446,6 +446,18 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-06-28
+
+- **AP interface now gets its own MAC address when it needs one.** On some
+  Raspberry Pi Wi-Fi chips the access-point interface (`ap0`) came up sharing
+  the station interface's MAC, and hostapd failed to start with
+  `Could not set interface ap0 flags (UP): Name not unique on network`.
+  The AP setup now detects that collision and assigns `ap0` a distinct,
+  locally-administered MAC derived from `wlan0` before bringing it up, so
+  concurrent Wi-Fi + AP works on those boards too. Chips that already give
+  `ap0` a distinct MAC are left untouched, so existing gateways keep their
+  AP BSSID and provisioned inverters do not have to re-associate. (Fixes #39.)
+
 ### 2026-06-26
 
 - **Q1-2000-E now provisions and reports over Bluetooth.** A

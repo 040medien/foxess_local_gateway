@@ -35,6 +35,56 @@ NFT=$(find_cmd nft /usr/sbin/nft /sbin/nft /usr/bin/nft)
 SYSCTL=$(find_cmd sysctl /usr/sbin/sysctl /sbin/sysctl /usr/bin/sysctl)
 SYSTEMCTL=$(find_cmd systemctl /usr/bin/systemctl /bin/systemctl)
 
+log() {
+  echo "foxess-pi-ap: $*" >&2
+}
+
+iface_mac() {
+  "$IP" link show "$1" 2>/dev/null | awk '/link\/ether/ {print $2; exit}'
+}
+
+# The AP interface shares one radio with the station interface, and the Wi-Fi
+# firmware demultiplexes received frames by destination MAC. If the AP vif
+# inherits the station's MAC verbatim, the kernel refuses to bring it up
+# ("Could not set interface ap0 flags (UP): Name not unique on network",
+# ENOTUNIQ) and hostapd never starts.
+#
+# Only act when the two MACs are actually identical. Most brcmfmac firmwares
+# auto-derive a distinct MAC for the AP vif; we leave those untouched so an
+# already-provisioned AP keeps its BSSID and inverters do not have to
+# re-associate. When they do collide, assign the AP a distinct,
+# locally-administered MAC while the interface is down.
+#
+# Derivation: set the locally-administered bit (0x02) on the first octet AND
+# flip the 0x02 bit of the last octet. Touching the last octet guarantees the
+# result differs from the station MAC even if it was already locally
+# administered, and from the station-MAC-with-LA-bit value some drivers hand to
+# a P2P-device wdev.
+set_ap_mac() {
+  sta_mac=$(iface_mac "$STA_IFACE")
+  if [ -z "$sta_mac" ]; then
+    log "could not read $STA_IFACE MAC; leaving $AP_IFACE MAC unchanged"
+    return 0
+  fi
+  [ "$(iface_mac "$AP_IFACE")" = "$sta_mac" ] || return 0
+
+  first=$(printf '%s' "$sta_mac" | cut -d: -f1)
+  mid=$(printf '%s' "$sta_mac" | cut -d: -f2-5)
+  last=$(printf '%s' "$sta_mac" | cut -d: -f6)
+  new_first=$(printf '%02x' "$(( 0x$first | 0x02 ))")
+  new_last=$(printf '%02x' "$(( 0x$last ^ 0x02 ))")
+  ap_mac="$new_first:$mid:$new_last"
+
+  log "$AP_IFACE shares $STA_IFACE MAC ($sta_mac); assigning distinct MAC $ap_mac"
+  if ! "$IP" link set "$AP_IFACE" address "$ap_mac" 2>/dev/null; then
+    log "WARNING: failed to set $AP_IFACE MAC to $ap_mac; hostapd may fail to start"
+    return 0
+  fi
+  if [ "$(iface_mac "$AP_IFACE")" = "$sta_mac" ]; then
+    log "WARNING: $AP_IFACE MAC still equals $STA_IFACE; hostapd may fail to start"
+  fi
+}
+
 start_ap_iface() {
   if ! "$IW" dev "$AP_IFACE" info >/dev/null 2>&1; then
     phy=$("$IW" dev "$STA_IFACE" info 2>/dev/null | awk '/wiphy/ {print "phy" $2; exit}')
@@ -44,6 +94,8 @@ start_ap_iface() {
     fi
     "$IW" phy "$phy" interface add "$AP_IFACE" type __ap
   fi
+  "$IP" link set "$AP_IFACE" down
+  set_ap_mac
   "$IP" link set "$AP_IFACE" up
   "$IP" addr flush dev "$AP_IFACE"
   "$IP" addr add "$AP_CIDR" dev "$AP_IFACE"
