@@ -19,8 +19,8 @@
     "password": ${MQTT_PASSWORD_JSON},
     "discovery_prefix": "homeassistant",
     "topic_prefix": "foxess_m1",
-    "retain": false,
-    "expire_after_seconds": 180,
+    "retain": true,
+    "expire_after_seconds": 300,
     "keepalive_seconds": 180,
     "reconnect_max_delay_seconds": 15,
     "debug": false

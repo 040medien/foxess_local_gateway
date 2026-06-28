@@ -200,8 +200,8 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertFalse(cfg.relay.enabled)
         self.assertEqual(cfg.relay.upstreams["8.209.116.72"], ("8.209.116.72", 14431))
         self.assertEqual(cfg.devices, {})
-        self.assertFalse(cfg.mqtt.retain)
-        self.assertEqual(cfg.mqtt.expire_after_seconds, 180)
+        self.assertTrue(cfg.mqtt.retain)
+        self.assertEqual(cfg.mqtt.expire_after_seconds, 300)
         self.assertFalse(cfg.mqtt.debug)
 
     def test_bootstrap_responder_matches_expected_shape(self) -> None:
@@ -1391,7 +1391,7 @@ class MqttPublisherTest(unittest.TestCase):
             self.assertEqual(payload["availability_mode"], "all")
             topics = [entry["topic"] for entry in payload["availability"]]
             self.assertEqual(topics, ["foxess_m1/status", "foxess_m1/Q1SERIAL000001/availability"])
-        self.assertTrue(any(payload.get("expire_after") == 180 for payload in discovery_payloads if payload["unique_id"].endswith("_pv4_power_w")))
+        self.assertTrue(any(payload.get("expire_after") == 300 for payload in discovery_payloads if payload["unique_id"].endswith("_pv4_power_w")))
 
     def test_mqtt_republishes_discovery_when_model_is_later_detected(self) -> None:
         client = FakeMqttClient()
@@ -1482,8 +1482,8 @@ class MqttPublisherTest(unittest.TestCase):
         self.assertIn("sequence", state)
         self.assertIn("operating_state_code", state)
         self.assertIn("raw_u16_002", state)
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/sequence"], ("1", False))
-        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/status_code"], ("4", False))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/sequence"], ("1", True))
+        self.assertEqual(published[f"foxess_m1/{TEST_SERIAL}/0/status_code"], ("4", True))
         self.assertIn(f"foxess_{TEST_SERIAL}_raw_u16_002", discovery_ids)
         self.assertEqual(names_by_id[f"foxess_{TEST_SERIAL}_export_power_w"], "Export Power")
 

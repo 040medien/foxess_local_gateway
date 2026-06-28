@@ -16,8 +16,8 @@ class MqttConfig:
     password: str | None = None
     discovery_prefix: str = "homeassistant"
     topic_prefix: str = "foxess_m1"
-    retain: bool = False
-    expire_after_seconds: int | None = 180
+    retain: bool = True
+    expire_after_seconds: int | None = 300
     keepalive_seconds: int = 180
     reconnect_max_delay_seconds: int = 15
     # How often the daemon checks that paho's network loop is still alive and
@@ -116,8 +116,8 @@ def load_config(path: Path | None) -> AppConfig:
             password=mqtt_raw.get("password"),
             discovery_prefix=str(mqtt_raw.get("discovery_prefix", "homeassistant")),
             topic_prefix=str(mqtt_raw.get("topic_prefix", "foxess_m1")),
-            retain=bool(mqtt_raw.get("retain", False)),
-            expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 180)),
+            retain=bool(mqtt_raw.get("retain", True)),
+            expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 300)),
             keepalive_seconds=int(mqtt_raw.get("keepalive_seconds", 180)),
             reconnect_max_delay_seconds=int(mqtt_raw.get("reconnect_max_delay_seconds", 15)),
             health_check_interval_seconds=int(mqtt_raw.get("health_check_interval_seconds", 30)),
