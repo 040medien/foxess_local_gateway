@@ -1069,6 +1069,31 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         await session._settle_inverter_control()
         self.assertEqual(calls, [])
 
+    async def test_settle_skips_read_when_reapplying(self) -> None:
+        # Codex #46 (round 3): on a pending re-apply, settle must NOT issue the
+        # one-shot read and the write back-to-back. When pending it re-applies
+        # only; when not pending it reads only.
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 5)
+        session.serial = "S1"
+        events: list[object] = []
+
+        async def fake_read() -> None:
+            events.append("read")
+
+        async def fake_apply(percent: int, *, generation: int, source: str) -> None:
+            events.append(("apply", percent, source))
+
+        session._read_active_power_limit_once = fake_read  # type: ignore[method-assign]
+        session._apply_active_power_limit = fake_apply  # type: ignore[method-assign]
+        await session._settle_inverter_control()  # not pending -> read only
+        app.set_desired_active_power_limit("S1", 40)
+        await session._settle_inverter_control()  # pending -> re-apply only
+        self.assertEqual(events, ["read", ("apply", 40, "reapply")])
+
     def test_newer_setpoint_supersedes_pending(self) -> None:
         from foxess_local_cloud.config import InverterControl
 

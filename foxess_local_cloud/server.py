@@ -351,23 +351,24 @@ class Session:
                 self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
 
     async def _settle_inverter_control(self) -> None:
-        """Run once the session has settled (first telemetry frame): read the
-        current setpoint for HA, then re-apply a setpoint that an earlier
-        session couldn't confirm (the inverter dropped its connection), so
-        curtailment is self-healing across reconnects."""
-        await self._read_active_power_limit_once()
-        if not self.serial:
+        """Run once the session has settled (first telemetry frame). Either
+        re-apply a setpoint an earlier session couldn't confirm (so curtailment
+        is self-healing across reconnects) OR read the current setpoint for HA —
+        never both, so we don't issue a read and a write back-to-back in our
+        Modbus stream. A pending re-apply takes priority; its own confirmation
+        publishes the state, making the one-shot read redundant there."""
+        pending = self.app.pending_active_power_limit(self.serial) if self.serial else None
+        if pending is None:
+            await self._read_active_power_limit_once()
             return
-        pending = self.app.pending_active_power_limit(self.serial)
-        if pending is not None:
-            generation = self.app.current_active_power_limit_generation(self.serial)
-            self.app.logger.emit(
-                "active_power_limit_reapply",
-                session=self.session_id,
-                serial=self.serial,
-                value=pending,
-            )
-            await self._apply_active_power_limit(pending, generation=generation, source="reapply")
+        generation = self.app.current_active_power_limit_generation(self.serial)
+        self.app.logger.emit(
+            "active_power_limit_reapply",
+            session=self.session_id,
+            serial=self.serial,
+            value=pending,
+        )
+        await self._apply_active_power_limit(pending, generation=generation, source="reapply")
 
     async def _read_active_power_limit_once(self) -> None:
         """Inject a one-shot read of the ActivePowerLimit register so HA can
