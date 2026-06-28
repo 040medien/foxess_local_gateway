@@ -1014,7 +1014,8 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         session.serial = "S1"
         writer = FakeStreamWriter()
         session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
-        task = asyncio.create_task(session._apply_active_power_limit(60, source="reapply"))
+        gen = app.current_active_power_limit_generation("S1")
+        task = asyncio.create_task(session._apply_active_power_limit(60, generation=gen, source="reapply"))
         for _ in range(20):
             if writer.writes:
                 break
@@ -1038,7 +1039,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         async def fake_read() -> None:
             return None
 
-        async def fake_apply(percent: int, *, source: str) -> None:
+        async def fake_apply(percent: int, *, generation: int, source: str) -> None:
             calls.append((percent, source))
 
         session._read_active_power_limit_once = fake_read  # type: ignore[method-assign]
@@ -1051,8 +1052,8 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
         app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
         app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
-        app.set_desired_active_power_limit("S1", 70)
-        app.mark_active_power_limit_applied("S1", 70)  # confirmed -> not pending
+        gen = app.set_desired_active_power_limit("S1", 70)
+        app.mark_active_power_limit_applied("S1", 70, gen)  # confirmed -> not pending
         session = Session(app, 4)
         session.serial = "S1"
         calls: list[tuple[int, str]] = []
@@ -1060,7 +1061,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         async def fake_read() -> None:
             return None
 
-        async def fake_apply(percent: int, *, source: str) -> None:
+        async def fake_apply(percent: int, *, generation: int, source: str) -> None:
             calls.append((percent, source))
 
         session._read_active_power_limit_once = fake_read  # type: ignore[method-assign]
@@ -1085,11 +1086,24 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         from foxess_local_cloud.config import InverterControl
 
         app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
-        app.set_desired_active_power_limit("S1", 80)
-        app.mark_active_power_limit_applied("S1", 80)
+        gen = app.set_desired_active_power_limit("S1", 80)
+        app.mark_active_power_limit_applied("S1", 80, gen)
         self.assertIsNone(app.pending_active_power_limit("S1"))
         app.set_desired_active_power_limit("S1", 50)  # times out, never acked
         app.set_desired_active_power_limit("S1", 80)  # can't be confirmed
+        self.assertEqual(app.pending_active_power_limit("S1"), 80)
+
+    def test_stale_ack_does_not_confirm_newer_same_value(self) -> None:
+        # Regression (Codex #46, gen race): with concurrent writes 80 -> 50 -> 80,
+        # an ack for the FIRST 80 (an older generation) must not mark the latest
+        # 80 confirmed; otherwise a lost final write leaves the inverter at 50.
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        g1 = app.set_desired_active_power_limit("S1", 80)
+        app.set_desired_active_power_limit("S1", 50)
+        app.set_desired_active_power_limit("S1", 80)  # latest generation
+        app.mark_active_power_limit_applied("S1", 80, g1)  # late ack for the first 80
         self.assertEqual(app.pending_active_power_limit("S1"), 80)
 
     async def test_setpoint_confirmed_publishes_result_and_state(self) -> None:
