@@ -448,6 +448,15 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-06-28
 
+- **AP interface now gets its own MAC address when it needs one.** On some
+  Raspberry Pi Wi-Fi chips the access-point interface (`ap0`) came up sharing
+  the station interface's MAC, and hostapd failed to start with
+  `Could not set interface ap0 flags (UP): Name not unique on network`.
+  The AP setup now detects that collision and assigns `ap0` a distinct,
+  locally-administered MAC derived from `wlan0` before bringing it up, so
+  concurrent Wi-Fi + AP works on those boards too. Chips that already give
+  `ap0` a distinct MAC are left untouched, so existing gateways keep their
+  AP BSSID and provisioned inverters do not have to re-associate. (Fixes #39.)
 - **MQTT defaults tuned for the ~90 s telemetry cadence.** `retain` now
   defaults to on, so the last reading survives in the broker and Home
   Assistant entities keep their value across HA restarts instead of
