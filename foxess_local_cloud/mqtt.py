@@ -168,6 +168,9 @@ class MqttPublisher:
     def active_power_limit_state_topic(self, serial: str) -> str:
         return f"{self.config.topic_prefix}/{serial}/active_power_limit/state"
 
+    def active_power_limit_result_topic(self, serial: str) -> str:
+        return f"{self.config.topic_prefix}/{serial}/active_power_limit/result"
+
     def register_active_power_limit_handler(
         self, serial: str, handler: Callable[[int], None]
     ) -> None:
@@ -199,6 +202,15 @@ class MqttPublisher:
             return
         topic = self.active_power_limit_state_topic(serial)
         self._publish(topic, str(value), retain=self.config.retain)
+
+    def publish_active_power_limit_result(self, serial: str, status: str) -> None:
+        """Publish the outcome of the last ActivePowerLimit write (e.g.
+        ``confirmed`` / ``timeout`` / ``no_connection`` / ``error``) so a
+        control loop or the operator can tell whether a setpoint landed."""
+        if not self.enabled or self.client is None or not serial:
+            return
+        topic = self.active_power_limit_result_topic(serial)
+        self._publish(topic, status, retain=self.config.retain)
 
     def publish(self, telemetry: Telemetry) -> None:
         if not self.enabled or self.client is None or not telemetry.serial:
@@ -388,6 +400,19 @@ class MqttPublisher:
             "device": device,
         }
         self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
+
+        result_config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/active_power_limit_result/config"
+        result_payload: dict[str, Any] = {
+            "name": "Active Power Limit Result",
+            "unique_id": f"foxess_{serial}_active_power_limit_result",
+            "object_id": f"foxess_{serial}_active_power_limit_result",
+            "state_topic": self.active_power_limit_result_topic(serial),
+            "entity_category": "diagnostic",
+            "availability": self._availability_block(serial),
+            "availability_mode": "all",
+            "device": device,
+        }
+        self._publish(result_config_topic, json.dumps(result_payload, separators=(",", ":")), retain=True)
         self._active_power_limit_announced.add(serial)
 
     def _publish_mesh_discovery(self, telemetry: Telemetry, device: dict[str, Any], state_topic: str) -> None:

@@ -882,6 +882,91 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(write_events[0]["address_hex"], "0xca5a")
         self.assertEqual(write_events[0]["value"], 75)
 
+    async def test_write_register_confirmed_when_response_arrives(self) -> None:
+        import asyncio
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import WRITE_CONFIRMED
+        from foxess_local_cloud.protocol import extract_frames
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+
+        task = asyncio.create_task(
+            session.local_control.write_register(0xCA5A, 75, timeout=2.0)  # type: ignore[union-attr]
+        )
+        for _ in range(20):
+            if writer.writes:
+                break
+            await asyncio.sleep(0)
+        frame = extract_frames(bytearray(writer.writes[0]))[0]
+        session.local_control.resolve_response(bytes(frame.device))  # type: ignore[union-attr]
+        self.assertEqual(await task, WRITE_CONFIRMED)
+
+    async def test_write_register_times_out_without_response(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import WRITE_TIMEOUT
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.local_control.attach_inverter_writer(FakeStreamWriter())  # type: ignore[union-attr]
+        result = await session.local_control.write_register(0xCA5A, 75, timeout=0.05)  # type: ignore[union-attr]
+        self.assertEqual(result, WRITE_TIMEOUT)
+
+    async def test_write_register_no_connection_without_writer(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import WRITE_NO_CONNECTION
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        # No inverter writer attached.
+        result = await session.local_control.write_register(0xCA5A, 75, timeout=1.0)  # type: ignore[union-attr]
+        self.assertEqual(result, WRITE_NO_CONNECTION)
+
+    async def test_setpoint_confirmed_publishes_result_and_state(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(
+            AppConfig(inverter_control=InverterControl(enabled=True, write_timeout_seconds=0.0))
+        )
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = "TESTSERIAL"
+        results: list[tuple[str, str]] = []
+        states: list[tuple[str, int]] = []
+        app.mqtt.publish_active_power_limit_result = lambda s, status: results.append((s, status))  # type: ignore[method-assign]
+        app.mqtt.publish_active_power_limit_state = lambda s, v: states.append((s, v))  # type: ignore[method-assign]
+        session.local_control.attach_inverter_writer(FakeStreamWriter())  # type: ignore[union-attr]
+
+        await session._handle_active_power_limit_setpoint(50)
+
+        self.assertEqual(results, [("TESTSERIAL", "confirmed")])
+        self.assertEqual(states, [("TESTSERIAL", 50)])
+
+    async def test_setpoint_timeout_publishes_result_but_not_state(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(
+            AppConfig(inverter_control=InverterControl(enabled=True, write_timeout_seconds=0.05))
+        )
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = "TESTSERIAL"
+        results: list[tuple[str, str]] = []
+        states: list[tuple[str, int]] = []
+        app.mqtt.publish_active_power_limit_result = lambda s, status: results.append((s, status))  # type: ignore[method-assign]
+        app.mqtt.publish_active_power_limit_state = lambda s, v: states.append((s, v))  # type: ignore[method-assign]
+        session.local_control.attach_inverter_writer(FakeStreamWriter())  # type: ignore[union-attr]
+
+        await session._handle_active_power_limit_setpoint(50)
+
+        self.assertEqual(results, [("TESTSERIAL", "timeout")])
+        self.assertEqual(states, [])
+
     async def test_local_control_read_holding_registers_pending_for_response_join(self) -> None:
         from foxess_local_cloud.config import InverterControl
         from foxess_local_cloud.local_control import normalize_device
