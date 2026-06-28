@@ -67,6 +67,11 @@ class AppConfig:
     devices: dict[str, str] = field(default_factory=dict)
     mqtt: MqttConfig = field(default_factory=MqttConfig)
     publish_min_interval_seconds: float = 0.0
+    # TCP keepalive (seconds idle before probing) on the inverter connection, to
+    # keep a marginal Wi-Fi link warm and detect a dropped session quickly so the
+    # ActivePowerLimit retry-on-reconnect kicks in. 0 disables. Linux-only knobs;
+    # silently skipped where unsupported.
+    inverter_tcp_keepalive_seconds: int = 30
     relay: RelayConfig = field(default_factory=lambda: RelayConfig())
     inverter_control: InverterControl = field(default_factory=InverterControl)
 
@@ -129,6 +134,7 @@ def load_config(path: Path | None) -> AppConfig:
             debug=bool(mqtt_raw.get("debug", False)),
         ),
         publish_min_interval_seconds=float(raw.get("publish_min_interval_seconds", 0.0)),
+        inverter_tcp_keepalive_seconds=int(raw.get("inverter_tcp_keepalive_seconds", 30)),
         relay=RelayConfig(
             enabled=bool(relay_raw.get("enabled", False)),
             upstreams=upstreams,

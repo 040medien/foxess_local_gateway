@@ -191,6 +191,25 @@ connections are redirected.
 NAT is enabled by default for non-redirected inverter traffic so relay mode can
 reach the upstream LAN.
 
+### Pinning the inverter IP (optional)
+
+The gateway does not need a fixed inverter IP — the inverter dials the daemon and
+the redirect matches the whole AP subnet, so a changing DHCP lease doesn't affect
+telemetry or control. The daemon also enables TCP keepalive on the inverter
+connection (`inverter_tcp_keepalive_seconds`, default 30 s) to keep a marginal
+link warm and detect drops quickly.
+
+If you still want a stable address (e.g. to run an external `arping` keepalive at
+a known IP), add a dnsmasq reservation. Find the inverter's MAC from a current
+lease (`cat /var/lib/misc/dnsmasq.leases` or `ip neigh show dev ap0`), then add a
+line to `/etc/dnsmasq.d/foxess-local-cloud.conf`:
+
+```text
+dhcp-host=AA:BB:CC:DD:EE:FF,192.168.50.50
+```
+
+and `sudo systemctl restart dnsmasq`.
+
 ## Check Status
 
 ```bash

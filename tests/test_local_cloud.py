@@ -1131,6 +1131,36 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         app.mark_active_power_limit_applied("S1", 80, g1)  # late ack for the first 80
         self.assertEqual(app.pending_active_power_limit("S1"), 80)
 
+    def test_apply_inverter_keepalive(self) -> None:
+        import socket as _socket
+        from foxess_local_cloud.server import apply_inverter_keepalive
+
+        class FakeSock:
+            def __init__(self) -> None:
+                self.opts: list[tuple[int, int, int]] = []
+
+            def setsockopt(self, level: int, opt: int, value: int) -> None:
+                self.opts.append((level, opt, value))
+
+        class FakeWriter:
+            def __init__(self, sock: object) -> None:
+                self._sock = sock
+
+            def get_extra_info(self, name: str) -> object:
+                return self._sock if name == "socket" else None
+
+        sock = FakeSock()
+        apply_inverter_keepalive(FakeWriter(sock), 30)
+        self.assertIn((_socket.SOL_SOCKET, _socket.SO_KEEPALIVE, 1), sock.opts)
+
+        # 0 disables: no socket options touched.
+        off = FakeSock()
+        apply_inverter_keepalive(FakeWriter(off), 0)
+        self.assertEqual(off.opts, [])
+
+        # No socket available is a safe no-op.
+        apply_inverter_keepalive(FakeWriter(None), 30)
+
     async def test_setpoint_confirmed_publishes_result_and_state(self) -> None:
         from foxess_local_cloud.config import InverterControl
 
