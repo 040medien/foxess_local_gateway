@@ -927,6 +927,65 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         result = await session.local_control.write_register(0xCA5A, 75, timeout=1.0)  # type: ignore[union-attr]
         self.assertEqual(result, WRITE_NO_CONNECTION)
 
+    async def test_write_register_rejected_on_nak(self) -> None:
+        import asyncio
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import WRITE_REJECTED
+        from foxess_local_cloud.protocol import extract_frames
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+
+        task = asyncio.create_task(
+            session.local_control.write_register(0xCA5A, 75, timeout=2.0)  # type: ignore[union-attr]
+        )
+        for _ in range(20):
+            if writer.writes:
+                break
+            await asyncio.sleep(0)
+        frame = extract_frames(bytearray(writer.writes[0]))[0]
+        # Inverter answered, but with an exception (confirmed=False).
+        session.local_control.resolve_response(bytes(frame.device), confirmed=False)  # type: ignore[union-attr]
+        self.assertEqual(await task, WRITE_REJECTED)
+
+    async def test_write_register_no_connection_when_writer_closing(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.local_control import WRITE_NO_CONNECTION
+
+        class ClosingWriter(FakeStreamWriter):
+            def is_closing(self) -> bool:
+                return True
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.local_control.attach_inverter_writer(ClosingWriter())  # type: ignore[union-attr]
+        result = await session.local_control.write_register(0xCA5A, 75, timeout=1.0)  # type: ignore[union-attr]
+        self.assertEqual(result, WRITE_NO_CONNECTION)
+
+    def test_write_response_success_vs_exception_classification(self) -> None:
+        # The server confirms a write only when the echoed PDU is a 0x06 write
+        # response; a Modbus exception (0x86) must not classify as a success.
+        from foxess_local_cloud.protocol import (
+            COMMAND_ENVELOPE_FUNC,
+            MODBUS_FN_WRITE_SINGLE,
+            build_modbus_write_single,
+            extract_frames,
+            make_frame,
+            parse_modbus_command,
+        )
+
+        device = bytes([0xFF, 0x01, 0xF0, 0xAA])
+        echo = extract_frames(bytearray(build_modbus_write_single(device, 0xCA5A, 75)))[0]
+        self.assertEqual(parse_modbus_command(echo).get("function"), MODBUS_FN_WRITE_SINGLE)
+
+        nak_pdu = bytes([0x01, MODBUS_FN_WRITE_SINGLE | 0x80, 0x02])
+        nak = extract_frames(bytearray(make_frame(b"\x7f\x7f", device, COMMAND_ENVELOPE_FUNC, nak_pdu, b"\xf7\xf7")))[0]
+        self.assertNotEqual(parse_modbus_command(nak).get("function"), MODBUS_FN_WRITE_SINGLE)
+
     async def test_setpoint_confirmed_publishes_result_and_state(self) -> None:
         from foxess_local_cloud.config import InverterControl
 

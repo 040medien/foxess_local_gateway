@@ -456,11 +456,14 @@ history including refactors and internal scaffolding, see the git log.
 - **`Active Power Limit` writes are now confirmed.** Instead of fire-and-forget,
   the daemon waits for the inverter's Modbus acknowledgement (round-trip is
   ~0.3 s on a healthy link) and reports the outcome on
-  `foxess_m1/<serial>/active_power_limit/result` (`confirmed` / `timeout` /
-  `no_connection` / `error`), surfaced as an `Active Power Limit Result`
-  diagnostic sensor. The setpoint state is only updated when the write is
-  acknowledged, so an unconfirmed command no longer looks applied — useful when
-  driving curtailment (e.g. Nulleinspeisung) from your own fast power source.
+  `foxess_m1/<serial>/active_power_limit/result` (`confirmed` / `rejected` /
+  `timeout` / `no_connection` / `error`), surfaced as an `Active Power Limit
+  Result` diagnostic sensor. Only a genuine write acknowledgement counts as
+  `confirmed` — a Modbus exception/NAK is reported as `rejected`, and a command
+  sent while the inverter has dropped its session reports `no_connection`. The
+  setpoint state is only updated on a confirmed write, so an unconfirmed command
+  no longer looks applied — useful when driving curtailment (e.g.
+  Nulleinspeisung) from your own fast power source.
   Timeout is configurable via `inverter_control.write_timeout_seconds`
   (default 3 s). (Towards #43.)
 - **AP is now kept on 2.4 GHz, with a regulatory country code.** FoxESS
