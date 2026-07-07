@@ -419,6 +419,7 @@ run() {
 # Copy the repo into INSTALL_PREFIX, dropping any files no longer in the repo.
 sync_app_tree() {
   rsync -a --delete "${APP_RSYNC_EXCLUDES[@]}" "$ROOT_DIR/" "$INSTALL_PREFIX/"
+  chmod 0755 "$INSTALL_PREFIX"
 }
 
 REQUIREMENTS_STAMP() { printf '%s/venv/.requirements.sha256' "$INSTALL_PREFIX"; }
@@ -659,6 +660,7 @@ fi
 if [[ "$DRY_RUN" = 1 && "$SKIP_APP_COPY" != 1 ]]; then
   mkdir -p "$(dest "${INSTALL_PREFIX#/}")"
   rsync -a "${APP_RSYNC_EXCLUDES[@]}" "$ROOT_DIR/" "$(dest "${INSTALL_PREFIX#/}")/"
+  chmod 0755 "$(dest "${INSTALL_PREFIX#/}")"
 elif [[ "$DRY_RUN" != 1 ]]; then
   sync_app_tree
   ensure_venv

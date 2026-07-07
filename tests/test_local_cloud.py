@@ -2109,6 +2109,12 @@ class InstallerTest(unittest.TestCase):
             self.assertIn("Passphrase=testpass123", credentials)
             self.assertIn("Generated=0", credentials)
 
+    def test_pi_installer_resets_app_directory_mode_after_rsync(self) -> None:
+        installer = (ROOT / "installer/install_pi_zero_gateway.sh").read_text(encoding="utf-8")
+
+        self.assertIn('chmod 0755 "$INSTALL_PREFIX"', installer)
+        self.assertIn('chmod 0755 "$(dest "${INSTALL_PREFIX#/}")"', installer)
+
     def test_pi_installer_generates_ap_passphrase(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             subprocess.run(
