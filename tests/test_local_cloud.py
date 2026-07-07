@@ -1782,6 +1782,29 @@ class MqttPublisherTest(unittest.TestCase):
         self.assertEqual(running_config["device_class"], "running")
         self.assertEqual(running_config["value_template"], "{{ 'ON' if value_json.operating_state == 'running' else 'OFF' }}")
 
+    def test_mqtt_last_fault_time_discovery_uses_none_fallback(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(
+            MqttConfig(host="mqtt.local"),
+            {TEST_SERIAL: "Test Inverter"},
+            client_factory=lambda: client,
+        )
+        publisher.connect()
+
+        publisher.publish(sample_telemetry())
+
+        configs = {
+            topic: json.loads(payload)
+            for topic, payload, retain in client.published
+            if topic.endswith("/config") and retain and payload
+        }
+        timestamp_config = configs[f"homeassistant/sensor/foxess_{TEST_SERIAL}/last_fault_timestamp/config"]
+        self.assertEqual(timestamp_config["device_class"], "timestamp")
+        self.assertEqual(
+            timestamp_config["value_template"],
+            "{{ value_json.last_fault_timestamp if value_json.last_fault_timestamp else 'None' }}",
+        )
+
     def test_mqtt_debug_includes_raw_and_sequence_fields(self) -> None:
         client = FakeMqttClient()
         publisher = MqttPublisher(
