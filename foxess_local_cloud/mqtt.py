@@ -357,7 +357,7 @@ class MqttPublisher:
             "name": "Last Fault Time",
             "unique_id": f"foxess_{serial}_last_fault_timestamp",
             "object_id": f"foxess_{serial}_last_fault_timestamp",
-            "value_template": "{{ value_json.last_fault_timestamp }}",
+            "value_template": "{{ value_json.last_fault_timestamp if value_json.last_fault_timestamp else 'None' }}",
             "device_class": "timestamp",
             **common,
         }
