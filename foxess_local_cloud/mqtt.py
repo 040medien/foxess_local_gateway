@@ -251,19 +251,19 @@ class MqttPublisher:
             if field_name in {"serial", "model", "firmware", "module", "fault_active", "last_fault_code", "last_fault_message", "last_fault_timestamp", "mesh_role", "mesh_peer_serial"}:
                 continue
             config_topic = f"{self.config.discovery_prefix}/sensor/foxess_{serial}/{field_name}/config"
+            unit, device_class, state_class = metadata_for(field_name)
             payload: dict[str, Any] = {
                 "name": friendly_field_name(field_name),
                 "unique_id": f"foxess_{serial}_{field_name}",
                 "object_id": f"foxess_{serial}_{field_name}",
                 "state_topic": state_topic,
-                "value_template": "{{ value_json." + field_name + " }}",
+                "value_template": value_template_for(field_name, device_class),
                 "availability": availability,
                 "availability_mode": "all",
                 "device": device,
             }
             if self.config.expire_after_seconds is not None:
                 payload["expire_after"] = self.config.expire_after_seconds
-            unit, device_class, state_class = metadata_for(field_name)
             if unit:
                 payload["unit_of_measurement"] = unit
             if device_class:
@@ -357,7 +357,7 @@ class MqttPublisher:
             "name": "Last Fault Time",
             "unique_id": f"foxess_{serial}_last_fault_timestamp",
             "object_id": f"foxess_{serial}_last_fault_timestamp",
-            "value_template": "{{ value_json.last_fault_timestamp }}",
+            "value_template": value_template_for("last_fault_timestamp", "timestamp"),
             "device_class": "timestamp",
             **common,
         }
@@ -545,6 +545,12 @@ def metadata_for(name: str) -> tuple[str | None, str | None, str | None]:
     if name == "operating_state":
         return None, "enum", None
     return None, None, None
+
+
+def value_template_for(field_name: str, device_class: str | None = None) -> str:
+    if device_class in {"date", "timestamp"}:
+        return "{{ value_json." + field_name + " if value_json." + field_name + " else 'None' }}"
+    return "{{ value_json." + field_name + " }}"
 
 
 def is_debug_field(name: str) -> bool:
