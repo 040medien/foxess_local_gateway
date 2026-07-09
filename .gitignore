@@ -11,7 +11,8 @@ build/
 .venv/
 venv/
 
-# Local Claude Code customisation: deny-list of private strings (device
-# aliases, hardware serials) that must never enter the repo. See
-# .claude/hooks/block_private_strings.py for the matching PreToolUse hook.
-.claude/private-strings
+# Local Codex setup: private deny-list and helper hooks for values that must
+# never enter the repo (device aliases, hardware serials, local config).
+.codex-local/
+
+AGENTS.md
