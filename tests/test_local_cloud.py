@@ -886,7 +886,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         import asyncio
         from foxess_local_cloud.config import InverterControl
         from foxess_local_cloud.local_control import WRITE_CONFIRMED
-        from foxess_local_cloud.protocol import extract_frames
+        from foxess_local_cloud.protocol import COMMAND_ENVELOPE_FUNC, extract_frames, make_frame
 
         app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
         app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
@@ -903,6 +903,29 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
         frame = extract_frames(bytearray(writer.writes[0]))[0]
         session.local_control.resolve_response(bytes(frame.device))  # type: ignore[union-attr]
+        self.assertEqual(await task, WRITE_CONFIRMED)
+
+        task = asyncio.create_task(
+            session.local_control.write_register(0xCA5A, 50, timeout=2.0)  # type: ignore[union-attr]
+        )
+        for _ in range(20):
+            if len(writer.writes) > 1:
+                break
+            await asyncio.sleep(0)
+        request = extract_frames(bytearray(writer.writes[1]))[0]
+        response_device = bytes([request.device[0] | 0x80]) + bytes(request.device[1:])
+        short_ack = extract_frames(
+            bytearray(
+                make_frame(
+                    b"\x7f\x7f",
+                    response_device,
+                    COMMAND_ENVELOPE_FUNC,
+                    bytes([0x01, 0x06]),
+                    b"\xf7\xf7",
+                )
+            )
+        )[0]
+        await session.handle_frame(short_ack, FakeStreamWriter())
         self.assertEqual(await task, WRITE_CONFIRMED)
 
     async def test_write_register_times_out_without_response(self) -> None:
@@ -974,6 +997,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
             MODBUS_FN_WRITE_SINGLE,
             build_modbus_write_single,
             extract_frames,
+            is_modbus_write_success_response,
             make_frame,
             parse_modbus_command,
         )
@@ -981,10 +1005,18 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         device = bytes([0xFF, 0x01, 0xF0, 0xAA])
         echo = extract_frames(bytearray(build_modbus_write_single(device, 0xCA5A, 75)))[0]
         self.assertEqual(parse_modbus_command(echo).get("function"), MODBUS_FN_WRITE_SINGLE)
+        self.assertTrue(is_modbus_write_success_response(echo))
+
+        short_ack_pdu = bytes([0x01, MODBUS_FN_WRITE_SINGLE])
+        short_ack = extract_frames(
+            bytearray(make_frame(b"\x7f\x7f", device, COMMAND_ENVELOPE_FUNC, short_ack_pdu, b"\xf7\xf7"))
+        )[0]
+        self.assertTrue(is_modbus_write_success_response(short_ack))
 
         nak_pdu = bytes([0x01, MODBUS_FN_WRITE_SINGLE | 0x80, 0x02])
         nak = extract_frames(bytearray(make_frame(b"\x7f\x7f", device, COMMAND_ENVELOPE_FUNC, nak_pdu, b"\xf7\xf7")))[0]
         self.assertNotEqual(parse_modbus_command(nak).get("function"), MODBUS_FN_WRITE_SINGLE)
+        self.assertFalse(is_modbus_write_success_response(nak))
 
     async def test_setpoint_without_connection_stays_pending(self) -> None:
         from foxess_local_cloud.config import InverterControl

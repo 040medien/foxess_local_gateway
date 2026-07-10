@@ -263,6 +263,23 @@ def parse_modbus_command(frame: Frame) -> dict:
     return {}
 
 
+def is_modbus_write_success_response(frame: Frame) -> bool:
+    """True for successful write-single-register responses.
+
+    Most firmware echoes the full Modbus write PDU
+    (slave/function/address/value). Some firmware has been observed to answer
+    with only ``slave,function`` (for example ``01 06``). Since this helper is
+    used only after the 7f envelope device field has already been matched to
+    one of our outstanding injected writes, the short form is enough to confirm
+    that write without mistaking Modbus exceptions (``01 86 xx``) for success.
+    """
+    if frame.start != b"\x7f\x7f":
+        return False
+    if parse_modbus_command(frame).get("function") == MODBUS_FN_WRITE_SINGLE:
+        return True
+    return len(frame.payload) == 2 and frame.payload[1] == MODBUS_FN_WRITE_SINGLE
+
+
 def is_modbus_read_response(frame: Frame) -> bool:
     """A 7f7f frame carrying a Modbus read response (fn 0x03/0x04 with data).
 
