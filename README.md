@@ -451,6 +451,14 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-07-10
+
+- **`Active Power Limit` accepts short write acknowledgements.** Some inverter
+  firmware answers a local `Active Power Limit` write with a short `01 06`
+  acknowledgement instead of the full Modbus write echo. That now counts as
+  `confirmed` when it matches one of our injected writes; real Modbus
+  exceptions still report `rejected`.
+
 ### 2026-06-28
 
 - **TCP keepalive on the inverter connection.** The daemon now enables TCP

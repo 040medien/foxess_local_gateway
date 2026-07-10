@@ -27,12 +27,12 @@ from .protocol import (
     is_mesh_root_frame,
     is_modbus_command,
     is_modbus_read_response,
+    is_modbus_write_success_response,
     is_module_info,
     is_product_info,
     is_registration,
     is_telemetry,
     mesh_peer_serial,
-    MODBUS_FN_WRITE_SINGLE,
     parse_modbus_command,
     parse_modbus_read_response,
     module_info,
@@ -589,10 +589,10 @@ class Session:
         # for every is-ours frame; a no-op for read responses. Runs for both
         # local and relay paths (run_relay separately strips it from upstream).
         if self.local_control is not None and self.local_control.is_our_frame(frame):
-            # Only a genuine write echo (function 0x06) counts as confirmed; a
-            # Modbus exception/NAK parses to {} (or a non-0x06 function) and is
-            # reported as rejected, so a refused setpoint never looks applied.
-            confirmed = parse_modbus_command(frame).get("function") == MODBUS_FN_WRITE_SINGLE
+            # Only a genuine write acknowledgement counts as confirmed. Some
+            # firmware replies with the full Modbus write echo, others with a
+            # short ``01 06`` ACK. Exceptions/NAKs still do not confirm.
+            confirmed = is_modbus_write_success_response(frame)
             self.local_control.resolve_response(bytes(frame.device), confirmed=confirmed)
         if is_registration(frame):
             self.serial = registration_serial(frame)
