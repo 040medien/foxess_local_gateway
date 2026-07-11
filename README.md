@@ -451,6 +451,13 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-07-11
+
+- **FoxCloud `Active Power Limit` changes update MQTT state.** When the FoxESS
+  cloud writes the `Active Power Limit` register while the gateway is relaying,
+  the Home Assistant/MQTT Number state now follows that observed value instead
+  of waiting for a later readback or local setpoint.
+
 ### 2026-07-10
 
 - **`Active Power Limit` accepts short write acknowledgements.** Some inverter
