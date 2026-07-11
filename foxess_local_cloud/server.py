@@ -266,6 +266,10 @@ class Session:
         # same key). Used to annotate the read response with the address it
         # was asking about.
         self.pending_reads: dict[bytes, tuple[int, int]] = {}
+        # Cloud-originated write requests keyed the same way. Used to publish
+        # externally changed writable settings only after the inverter echoes a
+        # successful write response.
+        self.pending_writes: dict[bytes, tuple[int, int]] = {}
         self.local_control: LocalControl | None = None
         self._inverter_control_command_registered = False
         if app.config.inverter_control.enabled:
@@ -547,6 +551,12 @@ class Session:
             pdu = parse_modbus_command(frame)
             if pdu["function"] in (0x03, 0x04):
                 self.pending_reads[normalize_device(bytes(frame.device))] = (pdu["address"], pdu["count"])
+            if (
+                pdu["function"] == 0x06
+                and self.local_control is not None
+                and not self.local_control.is_our_frame(frame)
+            ):
+                self.pending_writes[normalize_device(bytes(frame.device))] = (pdu["address"], pdu["value"])
             # Cloud-originated command frames carry the session marker in
             # device[3]. Capture it so our injections can mimic it.
             if (
@@ -594,6 +604,14 @@ class Session:
             # short ``01 06`` ACK. Exceptions/NAKs still do not confirm.
             confirmed = is_modbus_write_success_response(frame)
             self.local_control.resolve_response(bytes(frame.device), confirmed=confirmed)
+        if is_modbus_write_success_response(frame):
+            pending_write = self.pending_writes.pop(normalize_device(bytes(frame.device)), None)
+            if (
+                pending_write
+                and self.serial
+                and pending_write[0] == self.app.config.inverter_control.active_power_limit_address
+            ):
+                self.app.mqtt.publish_active_power_limit_state(self.serial, int(pending_write[1]))
         if is_registration(frame):
             self.serial = registration_serial(frame)
             self.app.logger.emit("registration", session=self.session_id, serial=self.serial or "")

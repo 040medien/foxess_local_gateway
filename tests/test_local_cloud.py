@@ -683,6 +683,44 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command_events[0]["address_hex"], "0xca5a")
         self.assertEqual(command_events[0]["value"], 100)
 
+    async def test_cloud_active_power_limit_write_publishes_mqtt_state(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import make_frame
+
+        raw = make_frame(
+            b"\x7f\x7f",
+            b"\x12\x39\x77\x0b",
+            0xAD,
+            bytes.fromhex("01 06 ca 5a 00 46"),
+            b"\xf7\xf7",
+        )
+        frame = extract_frames(bytearray(raw))[0]
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        app.logger.emit = lambda *a, **k: None  # type: ignore[method-assign]
+        states: list[tuple[str, int]] = []
+        app.mqtt.publish_active_power_limit_state = lambda s, v: states.append((s, v))  # type: ignore[method-assign]
+
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+        session.handle_upstream_frame(frame)
+        self.assertEqual(states, [])
+
+        response_device = bytes([frame.device[0] | 0x80]) + bytes(frame.device[1:])
+        response = extract_frames(
+            bytearray(
+                make_frame(
+                    b"\x7f\x7f",
+                    response_device,
+                    frame.func,
+                    frame.payload,
+                    b"\xf7\xf7",
+                )
+            )
+        )[0]
+        await session.handle_frame(response, FakeStreamWriter())
+        self.assertEqual(states, [(TEST_SERIAL, 70)])
+
     async def test_command_frame_decodes_modbus_write_multiple(self) -> None:
         from foxess_local_cloud.protocol import parse_modbus_command
 
