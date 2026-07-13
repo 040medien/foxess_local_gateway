@@ -273,18 +273,23 @@ class LocalCloudProtocolTest(unittest.TestCase):
         info = product_info(frame)
         self.assertEqual(info["model"], "Q1-E")
 
-    def test_fault_code_for_known_tuple_returns_foxess_codes(self) -> None:
+    def test_fault_code_for_decodes_newest_fifo_word(self) -> None:
         self.assertEqual(fault_code_for((4, 20, 28, 24)), "4156,4157")
 
-    def test_fault_code_for_ac_under_voltage_tuple(self) -> None:
-        # One AC Under Voltage episode walks the tuple as the fault re-logs;
-        # token-set matching covers every step including the full (4,4,4,4).
+    def test_fault_code_for_repeated_ac_under_voltage(self) -> None:
         for tuple_ in ((4, 0, 0, 0), (4, 4, 0, 0), (4, 4, 4, 0), (4, 4, 4, 4)):
             self.assertEqual(fault_code_for(tuple_), "4158")
             self.assertEqual(fault_code_message_for(fault_code_for(tuple_)), "AC Under Voltage")
 
-    def test_fault_code_for_is_token_order_independent(self) -> None:
-        self.assertEqual(fault_code_for((24, 28, 20, 4)), "4156,4157")
+    def test_fault_code_for_decodes_issue_52_as_ac_under_voltage(self) -> None:
+        self.assertEqual(fault_code_for((0x2106, 0x0106, 0x0104, 0x0004)), "4158")
+
+    def test_fault_code_for_covers_every_documented_ac_bit(self) -> None:
+        for bit in range(14):
+            self.assertEqual(fault_code_for((1 << bit, 0, 0, 0)), str(4160 - bit))
+
+    def test_fault_code_for_decodes_multiple_bits_in_numeric_order(self) -> None:
+        self.assertEqual(fault_code_for((0x2106, 0, 0, 0)), "4147,4152,4158,4159")
 
     def test_is_known_fault_code(self) -> None:
         self.assertTrue(is_known_fault_code("4158"))
@@ -293,9 +298,8 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertFalse(is_known_fault_code(""))
 
     def test_fault_code_for_unknown_tuple_returns_raw_hex(self) -> None:
-        result = fault_code_for((4, 33, 33, 0))
-        self.assertTrue(result.startswith("raw:"))
-        self.assertIn("21", result)  # 33 = 0x21
+        result = fault_code_for((4, 0x8000, 0, 0))
+        self.assertEqual(result, "raw:8000")
 
     def test_mesh_root_frame_detected(self) -> None:
         from foxess_local_cloud.protocol import is_mesh_root_frame
@@ -610,6 +614,29 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         cleared_events = [fields for event, fields in events if event == "fault_cleared"]
         self.assertEqual(len(cleared_events), 1)
         self.assertEqual(cleared_events[0]["code"], "4156,4157")
+
+    async def test_newest_fault_replaces_last_fault_while_fifo_remains_active(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+
+        under_voltage = bytearray(telemetry_payload())
+        under_voltage[100:102] = (4).to_bytes(2, "big")
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(under_voltage), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        repeated = bytearray(under_voltage)
+        repeated[102:104] = (4).to_bytes(2, "big")
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(repeated), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        frequency_fault = bytearray(repeated)
+        frequency_fault[104:106] = (24).to_bytes(2, "big")
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(frequency_fault), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        fault_events = [fields for event, fields in events if event == "fault_observed"]
+        self.assertEqual([event["code"] for event in fault_events], ["4158", "4156,4157"])
+        self.assertEqual(session.last_fault_code, "4156,4157")
 
     async def test_relay_falls_back_to_local_when_upstream_connect_fails(self) -> None:
         import asyncio as _asyncio
