@@ -1318,12 +1318,14 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         states: list[tuple[str, int]] = []
         app.mqtt.publish_active_power_limit_result = lambda s, status: results.append((s, status))  # type: ignore[method-assign]
         app.mqtt.publish_active_power_limit_state = lambda s, v: states.append((s, v))  # type: ignore[method-assign]
-        session.local_control.attach_inverter_writer(FakeStreamWriter())  # type: ignore[union-attr]
+        writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
 
         await session._handle_active_power_limit_setpoint(50)
 
         self.assertEqual(results, [("TESTSERIAL", "confirmed")])
         self.assertEqual(states, [("TESTSERIAL", 50)])
+        self.assertEqual(len(writer.writes), 2)  # acknowledged write, then diagnostic readback
 
     async def test_setpoint_timeout_publishes_result_but_not_state(self) -> None:
         from foxess_local_cloud.config import InverterControl
@@ -1344,6 +1346,112 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(results, [("TESTSERIAL", "timeout")])
         self.assertEqual(states, [])
+
+    async def test_acknowledged_setpoint_readback_reports_match_and_mismatch(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import extract_frames, make_frame
+
+        app = FoxessLocalCloud(
+            AppConfig(inverter_control=InverterControl(enabled=True, write_timeout_seconds=1.0))
+        )
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = "TESTSERIAL"
+        writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+
+        for requested, actual, expected_result in ((50, 50, "matched"), (40, 75, "mismatch")):
+            await session._read_active_power_limit_once(expected_value=requested, source="setpoint")
+            request = extract_frames(bytearray(writer.writes[-1]))[0]
+            echoed = bytes([request.device[0] | 0x80]) + bytes(request.device[1:])
+            response = make_frame(
+                b"\x7f\x7f",
+                echoed,
+                0xE2,
+                bytes([0x01, 0x03, 0x02, (actual >> 8) & 0xFF, actual & 0xFF]),
+                b"\xf7\xf7",
+            )
+            await session.handle_frame(
+                extract_frames(bytearray(response))[0],
+                FakeStreamWriter(),
+                send_bootstrap=False,
+            )
+
+        readbacks = [fields for event, fields in events if event == "active_power_limit_readback_result"]
+        self.assertEqual(
+            readbacks,
+            [
+                {
+                    "session": 1,
+                    "serial": "TESTSERIAL",
+                    "model": "",
+                    "firmware": "",
+                    "mesh_role": "",
+                    "address": 0xCA5A,
+                    "address_hex": "0xca5a",
+                    "requested_value": 50,
+                    "result": "matched",
+                    "source": "setpoint",
+                    "readback_value": 50,
+                },
+                {
+                    "session": 1,
+                    "serial": "TESTSERIAL",
+                    "model": "",
+                    "firmware": "",
+                    "mesh_role": "",
+                    "address": 0xCA5A,
+                    "address_hex": "0xca5a",
+                    "requested_value": 40,
+                    "result": "mismatch",
+                    "source": "setpoint",
+                    "readback_value": 75,
+                },
+            ],
+        )
+
+    async def test_acknowledged_setpoint_readback_reports_timeout(self) -> None:
+        import asyncio
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(
+            AppConfig(inverter_control=InverterControl(enabled=True, write_timeout_seconds=0.01))
+        )
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = "TESTSERIAL"
+        session.local_control.attach_inverter_writer(FakeStreamWriter())  # type: ignore[union-attr]
+
+        await session._read_active_power_limit_once(expected_value=50, source="reapply")
+        for _ in range(50):
+            if any(event == "active_power_limit_readback_result" for event, _fields in events):
+                break
+            await asyncio.sleep(0.01)
+
+        readbacks = [fields for event, fields in events if event == "active_power_limit_readback_result"]
+        self.assertEqual(readbacks[0]["result"], "timeout")
+        self.assertEqual(readbacks[0]["requested_value"], 50)
+        self.assertEqual(readbacks[0]["source"], "reapply")
+        self.assertEqual(session.pending_reads, {})
+        self.assertEqual(session.pending_active_power_limit_readbacks, {})
+
+    async def test_acknowledged_setpoint_readback_reports_no_connection(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = "TESTSERIAL"
+
+        await session._read_active_power_limit_once(expected_value=50, source="setpoint")
+
+        readbacks = [fields for event, fields in events if event == "active_power_limit_readback_result"]
+        self.assertEqual(readbacks[0]["result"], "no_connection")
+        self.assertEqual(session.pending_reads, {})
+        self.assertEqual(session.pending_active_power_limit_readbacks, {})
 
     async def test_local_control_read_holding_registers_pending_for_response_join(self) -> None:
         from foxess_local_cloud.config import InverterControl

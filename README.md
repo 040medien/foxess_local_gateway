@@ -453,6 +453,15 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-07-13
 
+- **Acknowledged power-limit writes are read back for diagnosis.** After the
+  inverter acknowledges a local `Active Power Limit` write, the gateway now
+  reads register `0xCA5A` on the same session and records an
+  `active_power_limit_readback_result` event with the requested and actual
+  values, inverter model/firmware/mesh role when known, and a precise outcome
+  (`matched`, `mismatch`, `timeout`, `no_connection`, or `error`). This is a
+  diagnostic step towards
+  [#54](https://github.com/040medien/foxess_local_gateway/issues/54); it does
+  not yet change retry or confirmation behaviour.
 - **AC fault codes are decoded generically.** The gateway now interprets the
   inverter's four recent-fault slots as the bitmasks they actually contain,
   covering every documented M/Q-series AC failure without adding one-off raw

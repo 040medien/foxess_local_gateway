@@ -266,6 +266,10 @@ class Session:
         # same key). Used to annotate the read response with the address it
         # was asking about.
         self.pending_reads: dict[bytes, tuple[int, int]] = {}
+        # Diagnostic readbacks issued immediately after an acknowledged local
+        # ActivePowerLimit write. Kept separately so ordinary startup and
+        # cloud-originated reads retain their existing correlation shape.
+        self.pending_active_power_limit_readbacks: dict[bytes, tuple[int, str]] = {}
         # Cloud-originated write requests keyed the same way. Used to publish
         # externally changed writable settings only after the inverter echoes a
         # successful write response.
@@ -276,8 +280,25 @@ class Session:
             self.local_control = LocalControl(
                 emit=self.app.logger.emit,
                 session_id=self.session_id,
-                register_pending_read=lambda key, addr, count: self.pending_reads.__setitem__(key, (addr, count)),
+                register_pending_read=self._register_pending_read,
+                unregister_pending_read=self._unregister_pending_read,
             )
+
+    def _register_pending_read(
+        self,
+        key: bytes,
+        address: int,
+        count: int,
+        expected_value: int | None,
+        source: str,
+    ) -> None:
+        self.pending_reads[key] = (address, count)
+        if expected_value is not None:
+            self.pending_active_power_limit_readbacks[key] = (expected_value, source)
+
+    def _unregister_pending_read(self, key: bytes) -> None:
+        self.pending_reads.pop(key, None)
+        self.pending_active_power_limit_readbacks.pop(key, None)
 
     def _maybe_wire_active_power_limit_mqtt(self) -> None:
         """Once we know the serial, register the HA Number entity and the
@@ -354,14 +375,14 @@ class Session:
             self.app.mark_active_power_limit_applied(self.serial, percent, generation)
             if generation == self.app.current_active_power_limit_generation(self.serial):
                 self.app.mqtt.publish_active_power_limit_state(self.serial, percent)
+            await self._read_active_power_limit_once(expected_value=percent, source=source)
 
     async def _settle_inverter_control(self) -> None:
         """Run once the session has settled (first telemetry frame). Either
         re-apply a setpoint an earlier session couldn't confirm (so curtailment
         is self-healing across reconnects) OR read the current setpoint for HA —
-        never both, so we don't issue a read and a write back-to-back in our
-        Modbus stream. A pending re-apply takes priority; its own confirmation
-        publishes the state, making the one-shot read redundant there."""
+        never issue the startup read before a pending re-apply. An acknowledged
+        re-apply now performs its own correlated diagnostic readback."""
         pending = self.app.pending_active_power_limit(self.serial) if self.serial else None
         if pending is None:
             await self._read_active_power_limit_once()
@@ -375,7 +396,12 @@ class Session:
         )
         await self._apply_active_power_limit(pending, generation=generation, source="reapply")
 
-    async def _read_active_power_limit_once(self) -> None:
+    async def _read_active_power_limit_once(
+        self,
+        *,
+        expected_value: int | None = None,
+        source: str = "startup",
+    ) -> None:
         """Inject a one-shot read of the ActivePowerLimit register so HA can
         show the current setpoint as soon as the inverter is reachable. The
         response flows through the normal command_response handler, which
@@ -384,7 +410,12 @@ class Session:
             return
         address = self.app.config.inverter_control.active_power_limit_address
         try:
-            await self.local_control.read_holding(address, 1)
+            device = await self.local_control.read_holding(
+                address,
+                1,
+                expected_value=expected_value,
+                source=source,
+            )
         except Exception as exc:
             self.app.logger.emit(
                 "active_power_limit_read_error",
@@ -392,6 +423,78 @@ class Session:
                 serial=self.serial,
                 error=str(exc),
             )
+            if expected_value is not None:
+                self._emit_active_power_limit_readback_result(
+                    requested_value=expected_value,
+                    source=source,
+                    result="error",
+                    error=str(exc),
+                )
+            return
+        if expected_value is None:
+            return
+        if device is None:
+            self._emit_active_power_limit_readback_result(
+                requested_value=expected_value,
+                source=source,
+                result="no_connection",
+            )
+            return
+        key = normalize_device(device)
+        timeout = self.app.config.inverter_control.write_timeout_seconds
+        asyncio.create_task(
+            self._active_power_limit_readback_timeout(
+                key,
+                requested_value=expected_value,
+                source=source,
+                timeout=timeout if timeout > 0 else 3.0,
+            )
+        )
+
+    async def _active_power_limit_readback_timeout(
+        self,
+        key: bytes,
+        *,
+        requested_value: int,
+        source: str,
+        timeout: float,
+    ) -> None:
+        await asyncio.sleep(timeout)
+        if self.pending_active_power_limit_readbacks.pop(key, None) is None:
+            return
+        self.pending_reads.pop(key, None)
+        self._emit_active_power_limit_readback_result(
+            requested_value=requested_value,
+            source=source,
+            result="timeout",
+        )
+
+    def _emit_active_power_limit_readback_result(
+        self,
+        *,
+        requested_value: int,
+        source: str,
+        result: str,
+        readback_value: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        fields: dict[str, Any] = {
+            "session": self.session_id,
+            "serial": self.serial or "",
+            "model": self.model,
+            "firmware": self.firmware,
+            "mesh_role": self.mesh_role,
+            "address": self.app.config.inverter_control.active_power_limit_address,
+            "address_hex": f"0x{self.app.config.inverter_control.active_power_limit_address:04x}",
+            "requested_value": requested_value,
+            "result": result,
+            "source": source,
+        }
+        if readback_value is not None:
+            fields["readback_value"] = readback_value
+        if error is not None:
+            fields["error"] = error
+        self.app.logger.emit("active_power_limit_readback_result", **fields)
 
     async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self.app.config.relay.enabled:
@@ -665,7 +768,9 @@ class Session:
             self.last_telemetry_at = time.time()
         if is_modbus_read_response(frame):
             pdu = parse_modbus_read_response(frame)
-            pending = self.pending_reads.pop(normalize_device(bytes(frame.device)), None)
+            key = normalize_device(bytes(frame.device))
+            pending = self.pending_reads.pop(key, None)
+            readback = self.pending_active_power_limit_readbacks.pop(key, None)
             fields: dict[str, Any] = {
                 "session": self.session_id,
                 "serial": self.serial or "",
@@ -689,7 +794,16 @@ class Session:
                 and pending[0] == self.app.config.inverter_control.active_power_limit_address
                 and pdu["values"]
             ):
-                self.app.mqtt.publish_active_power_limit_state(self.serial, int(pdu["values"][0]))
+                actual_value = int(pdu["values"][0])
+                self.app.mqtt.publish_active_power_limit_state(self.serial, actual_value)
+                if readback:
+                    requested_value, source = readback
+                    self._emit_active_power_limit_readback_result(
+                        requested_value=requested_value,
+                        source=source,
+                        result="matched" if actual_value == requested_value else "mismatch",
+                        readback_value=actual_value,
+                    )
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16
