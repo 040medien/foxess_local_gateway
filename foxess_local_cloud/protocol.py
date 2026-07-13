@@ -308,6 +308,32 @@ def parse_modbus_read_response(frame: Frame) -> dict:
     return {"slave": payload[0], "function": payload[1], "byte_count": bc, "values": values}
 
 
+def is_modbus_read_exception(frame: Frame) -> bool:
+    """A 7f7f frame carrying a Modbus exception for fn 0x03 or 0x04.
+
+    Exception PDUs are exactly ``slave,function|0x80,exception_code``. Keeping
+    this separate from successful read responses lets callers distinguish an
+    explicit inverter rejection from a request that received no response.
+    """
+    return (
+        frame.start == b"\x7f\x7f"
+        and len(frame.payload) == 3
+        and frame.payload[1]
+        in (MODBUS_FN_READ_HOLDING | 0x80, MODBUS_FN_READ_INPUT | 0x80)
+    )
+
+
+def parse_modbus_read_exception(frame: Frame) -> dict:
+    """Decode a Modbus read exception, or return an empty dict."""
+    if not is_modbus_read_exception(frame):
+        return {}
+    return {
+        "slave": frame.payload[0],
+        "function": frame.payload[1] & 0x7F,
+        "exception_code": frame.payload[2],
+    }
+
+
 def is_mesh_root_frame(frame: Frame) -> bool:
     """A 7f7f frame in which the inverter declares it is the mesh root, i.e.
     directly associated to the Pi's AP.

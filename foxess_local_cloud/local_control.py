@@ -85,11 +85,13 @@ class LocalControl:
         *,
         emit: Callable[..., None],
         session_id: int,
-        register_pending_read: Callable[[bytes, int, int], None],
+        register_pending_read: Callable[[bytes, int, int, int | None, str], None],
+        unregister_pending_read: Callable[[bytes], None],
     ) -> None:
         self._emit = emit
         self._session_id = session_id
         self._register_pending_read = register_pending_read
+        self._unregister_pending_read = unregister_pending_read
         self._counter = INJECTED_COUNTER_START
         self.inverter_writer: asyncio.StreamWriter | None = None
         # Normalized device keys of every request we've issued this session.
@@ -211,12 +213,22 @@ class LocalControl:
         if future is not None and not future.done():
             future.set_result(confirmed)
 
-    async def read_holding(self, address: int, count: int) -> bytes | None:
+    async def read_holding(
+        self,
+        address: int,
+        count: int,
+        *,
+        expected_value: int | None = None,
+        source: str = "startup",
+    ) -> bytes | None:
         """Inject a Modbus read-holding-registers request. Used to read back
-        the current ActivePowerLimit setting so HA can show its state."""
+        the current ActivePowerLimit setting so HA can show its state. When
+        ``expected_value`` is supplied, Session also correlates the response
+        with the acknowledged write that prompted this diagnostic read."""
         device = self._next_device(DEVICE_BYTE_READ)
         frame = build_modbus_read_holding(device, address, count)
-        self._register_pending_read(normalize_device(device), address, count)
+        key = normalize_device(device)
+        self._register_pending_read(key, address, count, expected_value, source)
         self._emit(
             "injected_read",
             session=self._session_id,
@@ -226,8 +238,15 @@ class LocalControl:
             address_hex=f"0x{address:04x}",
             count=count,
         )
-        self._outstanding.add(normalize_device(device))
-        return await self._send(device, frame)
+        self._outstanding.add(key)
+        try:
+            sent = await self._send(device, frame)
+        except Exception:
+            self._unregister_pending_read(key)
+            raise
+        if sent is None:
+            self._unregister_pending_read(key)
+        return sent
 
     async def _send(self, device: bytes, frame: bytes) -> bytes | None:
         writer = self.inverter_writer
