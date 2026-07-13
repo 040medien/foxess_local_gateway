@@ -62,11 +62,11 @@ FAULT_CODE_NAMES: dict[str, str] = {
 }
 
 
-def fault_code_for(offsets: tuple[int, int, int, int]) -> str:
-    """Decode the newest nonzero AC-fault FIFO word into FoxCloud ID(s)."""
+def fault_code_for(offsets: tuple[int, int, int, int], offset_98: int = 0) -> str:
+    """Decode the newest AC-fault FIFO word, preserving offset-98-only faults as raw."""
     newest = next((value for value in reversed(offsets) if value), 0)
     if not newest:
-        return ""
+        return f"raw:offset98={offset_98:04X}" if offset_98 else ""
     if newest & ~AC_FAULT_MASK:
         return f"raw:{newest:04X}"
     codes = sorted(4160 - bit for bit in range(AC_FAULT_BITS) if newest & (1 << bit))
