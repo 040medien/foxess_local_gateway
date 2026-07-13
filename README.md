@@ -451,6 +451,16 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-07-13
+
+- **AC fault codes are decoded generically.** The gateway now interprets the
+  inverter's four recent-fault slots as the bitmasks they actually contain,
+  covering every documented M/Q-series AC failure without adding one-off raw
+  value mappings. Mixed and changing faults update `Last Fault` to the newest
+  snapshot while repeated entries do not create duplicate transitions. This
+  also resolves the `raw:2106-106-104-04` report as `4158` — AC Under Voltage.
+  ([#52](https://github.com/040medien/foxess_local_gateway/issues/52))
+
 ### 2026-07-11
 
 - **FoxCloud `Active Power Limit` changes update MQTT state.** When the FoxESS

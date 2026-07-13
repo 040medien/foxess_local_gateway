@@ -6,29 +6,17 @@ from dataclasses import dataclass, asdict
 from typing import Any
 
 
-# Maps the SET of distinct nonzero fault-register tokens (the values seen at
-# offsets 100, 102, 104, 106) to the user-friendly 4-digit code(s) that
-# FoxCloud reports for the same fault. Each entry was built by correlating the
-# live values our daemon captured against the cloud's fault log timestamps for
-# the same inverter.
+# Offsets 100, 102, 104 and 106 are a four-entry FIFO of AC-fault snapshots.
+# New snapshots fill the slots from left to right, and each 16-bit word is a
+# bitmask: bit 0 is FoxESS ID4160, bit 1 is ID4159, ... bit 13 is ID4147.
+# This is the same ordering as the red-flash count in the M/Q-series manual.
 #
-# The registers behave like a small FIFO/accumulator: across one fault episode
-# the inverter re-logs the same fault every ~90 s, so the same token repeats
-# across slots and the tuple "walks" (e.g. (4,0,0,0) -> (4,4,0,0) -> (4,4,4,0)
-# -> (4,4,4,4) for AC Under Voltage). Keying on the distinct-token set rather
-# than the ordered tuple collapses the whole episode to one rule, and is robust
-# to which frame happens to be captured first after a reconnect.
-#
-# Add new entries here as new fault types are observed.
-FAULT_CODE_MAP: dict[frozenset[int], str] = {
-    # Confirmed against FoxCloud on 2026-06-06: AC Under Freq + AC Over Freq
-    # fired simultaneously during a PV string disconnect.
-    frozenset({4, 20, 28, 24}): "4156,4157",
-    # Confirmed against FoxCloud on 2026-06-13: AC Under Voltage fired when the
-    # PV input cables were unplugged and replugged (15:07:45 CEST, matched to
-    # the cloud fault log to the second).
-    frozenset({4}): "4158",
-}
+# The layout is confirmed by two independent live captures correlated against
+# FoxCloud: 0x0004 -> ID4158 (AC Under Voltage), and the newest word 0x0018 in
+# (0x0004, 0x0014, 0x001c, 0x0018) -> IDs 4156+4157.  Bits 14 and 15 are not
+# documented; retain the raw newest word if either appears rather than guessing.
+AC_FAULT_BITS = 14
+AC_FAULT_MASK = (1 << AC_FAULT_BITS) - 1
 
 
 # Map of FoxESS 4-digit fault code → human-readable name.
@@ -75,13 +63,14 @@ FAULT_CODE_NAMES: dict[str, str] = {
 
 
 def fault_code_for(offsets: tuple[int, int, int, int]) -> str:
-    """Return the FoxCloud 4-digit code(s) for a fault tuple, or raw hex for unknowns."""
-    tokens = frozenset(v for v in offsets if v)
-    if not tokens:
+    """Decode the newest nonzero AC-fault FIFO word into FoxCloud ID(s)."""
+    newest = next((value for value in reversed(offsets) if value), 0)
+    if not newest:
         return ""
-    if tokens in FAULT_CODE_MAP:
-        return FAULT_CODE_MAP[tokens]
-    return "raw:" + "-".join(f"{v:02X}" for v in offsets)
+    if newest & ~AC_FAULT_MASK:
+        return f"raw:{newest:04X}"
+    codes = sorted(4160 - bit for bit in range(AC_FAULT_BITS) if newest & (1 << bit))
+    return ",".join(str(code) for code in codes)
 
 
 def is_known_fault_code(code: str) -> bool:

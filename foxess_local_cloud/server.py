@@ -695,8 +695,8 @@ class Session:
         from .telemetry import u16
         offsets = (u16(payload, 100), u16(payload, 102), u16(payload, 104), u16(payload, 106))
         fault_active = any(offsets) or bool(u16(payload, 98))
-        if fault_active and not self._previous_fault_active:
-            code = fault_code_for(offsets)
+        code = fault_code_for(offsets) if fault_active else ""
+        if code and (not self._previous_fault_active or code != self.last_fault_code):
             now = time.time()
             timestamp = _iso8601(now)
             self.last_fault_code = code
