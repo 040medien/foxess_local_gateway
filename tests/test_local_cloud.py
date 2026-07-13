@@ -301,6 +301,14 @@ class LocalCloudProtocolTest(unittest.TestCase):
         result = fault_code_for((4, 0x8000, 0, 0))
         self.assertEqual(result, "raw:8000")
 
+    def test_fault_code_for_preserves_offset_98_only_fault(self) -> None:
+        self.assertEqual(fault_code_for((0, 0, 0, 0), 1), "raw:offset98=0001")
+        self.assertEqual(fault_code_message_for(fault_code_for((0, 0, 0, 0), 1)), "Unknown fault (raw:offset98=0001)")
+        self.assertFalse(is_known_fault_code(fault_code_for((0, 0, 0, 0), 1)))
+
+    def test_fault_code_for_prefers_ac_fifo_over_offset_98_marker(self) -> None:
+        self.assertEqual(fault_code_for((4, 0, 0, 0), 1), "4158")
+
     def test_mesh_root_frame_detected(self) -> None:
         from foxess_local_cloud.protocol import is_mesh_root_frame
         # Payload mirrors the captured root frame: declares the AP MAC + beacon mfg sig.
@@ -607,7 +615,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fault_events), 1)
         self.assertEqual(fault_events[0]["code"], "4156,4157")
         self.assertTrue(fault_events[0]["known"])
-        self.assertEqual(fault_events[0]["offsets"], {"100": 4, "102": 20, "104": 28, "106": 24})
+        self.assertEqual(fault_events[0]["offsets"], {"98": 0, "100": 4, "102": 20, "104": 28, "106": 24})
 
         # Frame 3: fault cleared → fault_cleared event
         await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(clean), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
@@ -637,6 +645,45 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         fault_events = [fields for event, fields in events if event == "fault_observed"]
         self.assertEqual([event["code"] for event in fault_events], ["4158", "4156,4157"])
         self.assertEqual(session.last_fault_code, "4156,4157")
+
+    async def test_offset_98_only_fault_is_observed_and_cleared(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+
+        marker_fault = bytearray(telemetry_payload())
+        marker_fault[98:100] = (1).to_bytes(2, "big")
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(marker_fault), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, telemetry_payload(), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        observed = [fields for event, fields in events if event == "fault_observed"]
+        cleared = [fields for event, fields in events if event == "fault_cleared"]
+        self.assertEqual(observed[0]["code"], "raw:offset98=0001")
+        self.assertFalse(observed[0]["known"])
+        self.assertEqual(observed[0]["offsets"], {"98": 1, "100": 0, "102": 0, "104": 0, "106": 0})
+        self.assertEqual(cleared[0]["code"], "raw:offset98=0001")
+
+    async def test_offset_98_only_fault_replaces_stale_ac_fault_code(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+
+        ac_fault = bytearray(telemetry_payload())
+        ac_fault[100:102] = (4).to_bytes(2, "big")
+        marker_fault = bytearray(telemetry_payload())
+        marker_fault[98:100] = (1).to_bytes(2, "big")
+        for payload in (bytes(ac_fault), telemetry_payload(), bytes(marker_fault), telemetry_payload()):
+            await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, payload, b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        observed = [fields["code"] for event, fields in events if event == "fault_observed"]
+        cleared = [fields["code"] for event, fields in events if event == "fault_cleared"]
+        self.assertEqual(observed, ["4158", "raw:offset98=0001"])
+        self.assertEqual(cleared, ["4158", "raw:offset98=0001"])
+        self.assertEqual(session.last_fault_code, "raw:offset98=0001")
 
     async def test_relay_falls_back_to_local_when_upstream_connect_fails(self) -> None:
         import asyncio as _asyncio

@@ -693,9 +693,10 @@ class Session:
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16
+        offset_98 = u16(payload, 98)
         offsets = (u16(payload, 100), u16(payload, 102), u16(payload, 104), u16(payload, 106))
-        fault_active = any(offsets) or bool(u16(payload, 98))
-        code = fault_code_for(offsets) if fault_active else ""
+        fault_active = any(offsets) or bool(offset_98)
+        code = fault_code_for(offsets, offset_98) if fault_active else ""
         if code and (not self._previous_fault_active or code != self.last_fault_code):
             now = time.time()
             timestamp = _iso8601(now)
@@ -707,7 +708,7 @@ class Session:
                 serial=self.serial or "",
                 code=code,
                 known=is_known_fault_code(code),
-                offsets={"100": offsets[0], "102": offsets[1], "104": offsets[2], "106": offsets[3]},
+                offsets={"98": offset_98, "100": offsets[0], "102": offsets[1], "104": offsets[2], "106": offsets[3]},
                 at=timestamp,
             )
         elif not fault_active and self._previous_fault_active:

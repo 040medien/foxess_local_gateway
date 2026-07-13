@@ -459,6 +459,9 @@ history including refactors and internal scaffolding, see the git log.
   value mappings. Mixed and changing faults update `Last Fault` to the newest
   snapshot while repeated entries do not create duplicate transitions. This
   also resolves the `raw:2106-106-104-04` report as `4158` — AC Under Voltage.
+  Faults signalled only by the separate, not-yet-decoded offset-98 word are
+  retained as a stable raw code instead of leaving the previous AC fault in
+  place.
   ([#52](https://github.com/040medien/foxess_local_gateway/issues/52))
 
 ### 2026-07-11
