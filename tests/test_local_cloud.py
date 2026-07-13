@@ -1437,6 +1437,44 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.pending_reads, {})
         self.assertEqual(session.pending_active_power_limit_readbacks, {})
 
+    async def test_acknowledged_setpoint_readback_reports_modbus_exception_as_error(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+        from foxess_local_cloud.protocol import extract_frames, make_frame
+
+        app = FoxessLocalCloud(AppConfig(inverter_control=InverterControl(enabled=True)))
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = "TESTSERIAL"
+        writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+
+        await session._read_active_power_limit_once(expected_value=50, source="setpoint")
+        request = extract_frames(bytearray(writer.writes[-1]))[0]
+        echoed = bytes([request.device[0] | 0x80]) + bytes(request.device[1:])
+        exception = make_frame(
+            b"\x7f\x7f",
+            echoed,
+            0xE2,
+            bytes([0x01, 0x83, 0x02]),
+            b"\xf7\xf7",
+        )
+        await session.handle_frame(
+            extract_frames(bytearray(exception))[0],
+            FakeStreamWriter(),
+            send_bootstrap=False,
+        )
+
+        readbacks = [fields for event, fields in events if event == "active_power_limit_readback_result"]
+        self.assertEqual(readbacks[0]["result"], "error")
+        self.assertEqual(readbacks[0]["error"], "modbus_exception")
+        self.assertEqual(readbacks[0]["modbus_exception_code"], 2)
+        self.assertEqual(readbacks[0]["modbus_exception_code_hex"], "0x02")
+        command_errors = [fields for event, fields in events if event == "command_error"]
+        self.assertEqual(command_errors[0]["address_hex"], "0xca5a")
+        self.assertEqual(session.pending_reads, {})
+        self.assertEqual(session.pending_active_power_limit_readbacks, {})
+
     async def test_acknowledged_setpoint_readback_reports_no_connection(self) -> None:
         from foxess_local_cloud.config import InverterControl
 

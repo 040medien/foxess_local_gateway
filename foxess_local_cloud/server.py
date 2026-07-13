@@ -26,6 +26,7 @@ from .protocol import (
     is_mesh_follower_frame,
     is_mesh_root_frame,
     is_modbus_command,
+    is_modbus_read_exception,
     is_modbus_read_response,
     is_modbus_write_success_response,
     is_module_info,
@@ -34,6 +35,7 @@ from .protocol import (
     is_telemetry,
     mesh_peer_serial,
     parse_modbus_command,
+    parse_modbus_read_exception,
     parse_modbus_read_response,
     module_info,
     product_info,
@@ -477,6 +479,7 @@ class Session:
         result: str,
         readback_value: int | None = None,
         error: str | None = None,
+        modbus_exception_code: int | None = None,
     ) -> None:
         fields: dict[str, Any] = {
             "session": self.session_id,
@@ -494,6 +497,9 @@ class Session:
             fields["readback_value"] = readback_value
         if error is not None:
             fields["error"] = error
+        if modbus_exception_code is not None:
+            fields["modbus_exception_code"] = modbus_exception_code
+            fields["modbus_exception_code_hex"] = f"0x{modbus_exception_code:02x}"
         self.app.logger.emit("active_power_limit_readback_result", **fields)
 
     async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -804,6 +810,36 @@ class Session:
                         result="matched" if actual_value == requested_value else "mismatch",
                         readback_value=actual_value,
                     )
+        if is_modbus_read_exception(frame):
+            pdu = parse_modbus_read_exception(frame)
+            key = normalize_device(bytes(frame.device))
+            pending = self.pending_reads.pop(key, None)
+            readback = self.pending_active_power_limit_readbacks.pop(key, None)
+            fields: dict[str, Any] = {
+                "session": self.session_id,
+                "serial": self.serial or "",
+                "device": frame.device.hex(),
+                "slave": pdu["slave"],
+                "function": pdu["function"],
+                "function_name": _MODBUS_NAMES.get(pdu["function"], "unknown"),
+                "exception_code": pdu["exception_code"],
+                "exception_code_hex": f"0x{pdu['exception_code']:02x}",
+            }
+            if pending:
+                address, count = pending
+                fields["address"] = address
+                fields["address_hex"] = f"0x{address:04x}"
+                fields["count"] = count
+            self.app.logger.emit("command_error", **fields)
+            if readback:
+                requested_value, source = readback
+                self._emit_active_power_limit_readback_result(
+                    requested_value=requested_value,
+                    source=source,
+                    result="error",
+                    error="modbus_exception",
+                    modbus_exception_code=pdu["exception_code"],
+                )
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16
