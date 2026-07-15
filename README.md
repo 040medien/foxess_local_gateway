@@ -12,9 +12,9 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
-- Writable `Active Power Limit` slider in Home Assistant for
-  curtailment during negative electricity prices or demand-charge avoidance (German
-  Nulleinspeisung).
+- Writable `Active Power Limit` slider in Home Assistant for curtailment during
+  negative electricity prices or demand-charge avoidance (German
+  Nulleinspeisung); requires inverter firmware 1.80 or newer.
 - No data leaves your network, including during initial setup — the Pi can
   provision the inverter directly over Bluetooth, so the FoxCloud mobile
   app is optional.
@@ -318,7 +318,10 @@ The local `Active Power Limit` control requires inverter firmware **1.80 or
 newer**. It is confirmed unavailable on 1.66 and available on 1.80; FoxCloud
 did not offer 1.77 for a direct boundary test. The current version appears in
 the Home Assistant device information
-and in the gateway's `product_info` log event.
+and in the gateway's `product_info` log event. The gateway only publishes the
+Home Assistant slider and subscribes to its command topic after the inverter
+reports a parseable version of 1.80 or newer. Older or unknown versions have
+any retained `Active Power Limit` discovery entities removed automatically.
 
 FoxESS makes firmware updates available through a FoxCloud 2.0 installer
 account. The exact versions offered depend on the account, region, and device:
@@ -495,6 +498,10 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-07-15
 
+- **Power-limit controls are firmware-gated.** The Home Assistant `Active
+  Power Limit` slider and its MQTT command handler are exposed only after the
+  inverter reports firmware 1.80 or newer. Older or unparseable versions also
+  clear retained discovery left by a previous supported firmware session.
 - **Firmware capture and controlled local upgrades.** An opt-in relay mode can
   intercept a FoxCloud firmware push, save the verified binary and manifest,
   and simulate acknowledgements/progress without passing the update to the

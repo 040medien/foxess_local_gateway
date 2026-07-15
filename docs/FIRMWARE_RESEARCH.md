@@ -117,24 +117,101 @@ have been checked; timeout alone does not prove failure.
 
 ## Compatibility clues
 
-Word-swapped strings in the image include `M10300`, `184`, `SIW100G`, and
-`FHE-MASTER`. The latter two appear to be rebrand/product-family identifiers.
-Together with matching public power variants, this is good evidence that WEG
-SIW100G M006/M008/M010/M012 W00 and FHE-MASTER 600/800/1000/1200 use the same
-firmware platform. It is not proof of wire compatibility; neither family has
-yet been tested against the gateway.
+Word-swapped strings include `SIW100G` in every captured image,
+`FHE-MASTER` in 1.66 and later, and `M10300` in 1.83 and 1.84. The first two
+appear to be rebrand/product-family identifiers. Together with matching public
+power variants, this is good evidence that WEG SIW100G M006/M008/M010/M012 W00
+and FHE-MASTER 600/800/1000/1200 use the same firmware platform. It is not
+proof of wire compatibility; neither family has yet been tested against the
+gateway.
+
+## Cross-version comparison
+
+The five captured images were compared byte-for-byte after verifying their
+manifests. None has a container signature recognized by `file` or Binwalk.
+Their moderate entropy, repeated code/data blocks, readable word-swapped
+strings, and regular descriptor tables are evidence that these are raw,
+uncompressed images rather than encrypted or compressed containers.
+
+| Version | Region label | Size | Shannon entropy | Descriptor format |
+| --- | --- | ---: | ---: | --- |
+| 1.64 | Brazil only | 45,673 | 6.9031 bits/byte | 153 x 20 bytes |
+| 1.66 | Europe only | 45,769 | 6.9062 bits/byte | 153 x 20 bytes |
+| 1.80 | none | 49,009 | 6.8910 bits/byte | 153 x 20 bytes |
+| 1.83 | none | 51,941 | 6.9363 bits/byte | 328 x 12 bytes |
+| 1.84 | none | 51,941 | 6.9360 bits/byte | 328 x 12 bytes |
+
+Verified SHA-256 identities used for the comparison:
+
+- 1.64: `e04b3e3178a709b42ae4275dab7f1e9d119257fb08340de15d391c58b2318a4b`
+- 1.66: `546776648962e3230c25829a7f735a12c31d14f80c2641aabf65904f2f962220`
+- 1.80: `7d8d37463d0461bae975a3ef72f3f0e9031b16a0f6fbe3bb03617c6dc7a0eb59`
+- 1.83: `aba247328acf80c6ec8acdefe4b2ea9ed6e2428bf6fbbd4acf99410de83876b6`
+- 1.84: `ada02558b2725d62e6f005fbe86047f589355aa8682d7ae43d7ea89683349587`
+
+An order-preserving binary comparison gives the following exact-match ratios.
+This is a structural similarity measure, not a count of changed source lines:
+inserted code moves later blocks even when their contents remain identical.
+
+| Pair | Size delta | Exact-match ratio | Main observation |
+| --- | ---: | ---: | --- |
+| 1.64 -> 1.66 | +96 bytes | 93.17% | very closely related builds; region and version both differ |
+| 1.66 -> 1.80 | +3,240 bytes | 70.09% | substantial code growth; power-limit descriptor changes |
+| 1.80 -> 1.83 | +2,932 bytes | 80.85% | descriptor map expands and changes representation |
+| 1.83 -> 1.84 | 0 bytes | 99.969% | only 16 bytes differ in 13 short runs |
+
+The 1.83 and 1.84 descriptor tables are byte-identical. Their 16 changed bytes
+are confined to seven one-byte changes between offsets `0x6142` and `0x6B06`,
+six bytes in three repeated data/check fields between `0xCA24` and `0xCA5E`,
+and three bytes around the trailing version string at `0xCADC..0xCAE0`. The
+first `0x6142` bytes are identical, as is the large block from `0x6B07` to the
+data/check fields. This makes 1.84 look like a small maintenance release, with
+no register-map change, rather than a new platform build. The meaning of the
+seven code-area changes cannot be established until the instruction set and
+load map are known.
+
+The descriptor evolution gives the clearest power-limit result:
+
+- 1.64 and 1.66 do not contain the little-endian literal `0xCA5A`. They instead
+  contain one descriptor for `0xCA59`, internal id `0x012C`, bounds 0..100, and
+  metadata 0. Its similar shape makes it a possible predecessor, but it is not
+  identified and must not be written.
+- 1.80 replaces that one address with `0xCA5A`, internal id `0x0132`, bounds
+  0..100, and metadata 1. The descriptor count remains 153. This is direct
+  firmware evidence for a feature boundary at 1.80 and agrees with FoxCloud
+  exposing Active Power Limit on 1.80 but not 1.66.
+- 1.83 and 1.84 retain `0xCA5A` with the same bounds and metadata. Its internal
+  id moves to `0x0147` as the table grows to 328 records. Internal ids are
+  therefore build artifacts, not stable protocol identifiers.
+
+No human-readable `ActivePowerLimit` label is embedded in any captured image.
+The descriptor and the independently observed Modbus traffic are what identify
+`0xCA5A`. Firmware 1.77 is still unavailable, so these images do not establish
+whether an intermediate release below 1.80 used `0xCA59`, omitted local
+control, or used another implementation.
 
 ## Register descriptor table
 
-The image contains a regular 328-record table at file offsets approximately
-`0xA862..0xB7C1`. Records are 12-byte little-endian structures and currently
-fit the working interpretation:
+Every image contains a sorted little-endian descriptor table. The pre-1.83
+images use 153 20-byte records; 1.83 and 1.84 use 328 12-byte records:
+
+| Version | File range (end exclusive) | Working record layout |
+| --- | --- | --- |
+| 1.64 | `0x9BD8..0xA7CC` | `<u16, u16, u32, i32, u32, u32>` |
+| 1.66 | `0x9C24..0xA818` | `<u16, u16, u32, i32, u32, u32>` |
+| 1.80 | `0xA254..0xAE48` | `<u16, u16, u32, i32, u32, u32>` |
+| 1.83/1.84 | `0xA862..0xB7C2` | `<u16, u16, u16, i16, u16, u16>` |
+
+The fields currently fit the working interpretation:
 
 ```text
 <register address, internal id, flags, minimum, maximum, metadata>
 ```
 
-This layout is inferred, not yet confirmed by code references. Notable ranges:
+Signed minima such as -100 and -1000 survive the 32-to-16-bit representation
+change, which supports the widths shown above. The field meanings are still
+inferred rather than confirmed by code references. The expanded 1.83/1.84
+table contains these notable ranges:
 
 | Register range | Count | Working note |
 | --- | ---: | --- |
@@ -170,12 +247,14 @@ an architecture not covered by the attempted loader.
 
 Next investigation steps, in order:
 
-1. Compare the captured 1.80 and pre-1.80 images: hashes, entropy, changed
-   blocks, strings, and the descriptor table. A 1.79/1.80 diff remains the
-   best route to the power-limit implementation if 1.79 becomes available.
-2. Export the 328 descriptors to CSV with file offsets and test alternative
-   field widths/signedness. Look for sorted secondary indexes and cross-
-   references to `0xCA5A`/internal id `0x0147`.
+1. Capture 1.79 or the nearest available pre-1.80 Europe image. A same-region
+   adjacent-version diff remains the best route to the power-limit
+   implementation and avoids the region/version ambiguity in the 1.64/1.66
+   pair.
+2. Export every version's descriptors to CSV with file offsets and normalized
+   signed minima. Look for sorted secondary indexes and code references to the
+   table lookup machinery; direct searches for `0xCA5A` only find its one
+   descriptor record.
 3. Identify the MCU from PCB markings, update metadata, boot vectors, and
    instruction patterns. Build a Ghidra loader or preprocessor only after the
    byte/word transform and memory map are evidenced.

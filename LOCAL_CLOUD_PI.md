@@ -394,12 +394,14 @@ timeout. A normal directly transferred upgrade must report every chunk, reach
 
 ## Inverter Control
 
-Enabled by default. Exposes a writable `Active Power Limit` slider
-(0–100 %) in Home Assistant on firmware 1.80 or newer. No periodic polling — the daemon reads
-the current value once on the first telemetry frame so HA shows the
-live setpoint as soon as the inverter is producing, then writes
-whatever HA's slider sets and the response is stripped from the
-bytes forwarded to FoxCloud.
+Enabled by default. Exposes a writable `Active Power Limit` slider (0–100 %) in
+Home Assistant only after the inverter reports a parseable firmware version of
+1.80 or newer. Older or unknown versions have any retained slider discovery
+removed and their MQTT command topic is not handled. No periodic polling — the
+daemon reads the current value once on the first telemetry frame so HA shows
+the live setpoint as soon as the inverter is producing, then writes whatever
+HA's slider sets and the response is stripped from the bytes forwarded to
+FoxCloud.
 
 To turn it off:
 

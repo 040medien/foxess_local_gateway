@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import re
 import socket
 import ssl
 import struct
@@ -52,6 +53,8 @@ FOXESS_CIPHERS = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
 # self-signed and standard CA validation cannot apply. If FoxESS rotates,
 # update this constant or set relay.skip_cert_verify=true in config.
 FOXESS_UPSTREAM_CERT_SHA256 = "0ff6d2d0b548f0a03dced31ce7621a8c9497bdc074d723bc152094e4d299c1b7"
+ACTIVE_POWER_LIMIT_MIN_FIRMWARE = (1, 80)
+ACTIVE_POWER_LIMIT_MIN_FIRMWARE_TEXT = "1.80"
 
 _MODBUS_NAMES = {
     0x03: "read_holding",
@@ -78,6 +81,20 @@ def expected_disconnect_reason(exc: BaseException) -> str | None:
     ):
         return "tls_connection_lost"
     return None
+
+
+def supports_active_power_limit(firmware: str) -> bool:
+    """Whether a reported FoxESS firmware version supports register 0xCA5A.
+
+    FoxESS currently reports versions such as ``1.80`` and ``1.84``. Accept a
+    leading ``v`` and a patch/suffix defensively, but fail closed when no
+    numeric major/minor pair is available.
+    """
+    match = re.search(r"(?i)(?:^|[^0-9])v?(\d+)\.(\d+)(?:\.\d+)?", firmware.strip())
+    if match is None:
+        return False
+    version = (int(match.group(1)), int(match.group(2)))
+    return version >= ACTIVE_POWER_LIMIT_MIN_FIRMWARE
 
 
 class JsonLogger:
@@ -353,6 +370,7 @@ class Session:
         self.pending_writes: dict[bytes, tuple[int, int]] = {}
         self.local_control: LocalControl | None = None
         self._inverter_control_command_registered = False
+        self._inverter_control_settle_scheduled = False
         self.inverter_writer: asyncio.StreamWriter | None = None
         self.client_device_tail = b""
         self.last_client_func = 0
@@ -398,7 +416,11 @@ class Session:
         Modbus write. Idempotent."""
         if self._inverter_control_command_registered:
             return
-        if self.local_control is None or not self.serial:
+        if (
+            self.local_control is None
+            or not self.serial
+            or not supports_active_power_limit(self.firmware)
+        ):
             return
         publisher = self.app.mqtt
         loop = asyncio.get_running_loop()
@@ -419,6 +441,36 @@ class Session:
         # frame) reliably kills the TLS session with
         # APPLICATION_DATA_AFTER_CLOSE_NOTIFY; waiting for telemetry is a
         # natural "session is settled" gate that avoids the fragile window.
+
+    def _sync_active_power_limit_mqtt(self) -> None:
+        """Expose local control only after a compatible version is known.
+
+        Product-info frames repeat during a session, so both branches are
+        idempotent. The unsupported branch also removes retained discovery
+        left by an earlier/newer firmware session.
+        """
+        if not self.serial or self.local_control is None:
+            return
+        if supports_active_power_limit(self.firmware):
+            self._maybe_wire_active_power_limit_mqtt()
+            self._maybe_settle_inverter_control()
+            return
+        self.app.mqtt.unregister_active_power_limit_handler(self.serial)
+        self.app.mqtt.clear_active_power_limit_discovery(self.serial)
+        self._inverter_control_command_registered = False
+
+    def _maybe_settle_inverter_control(self) -> None:
+        """Schedule the startup read once both compatibility and a settled
+        session are known, regardless of which signal arrived first."""
+        if (
+            self._inverter_control_settle_scheduled
+            or self.last_telemetry_at is None
+            or self.local_control is None
+            or not self._inverter_control_command_registered
+        ):
+            return
+        self._inverter_control_settle_scheduled = True
+        asyncio.create_task(self._settle_inverter_control())
 
     async def _handle_active_power_limit_setpoint(self, percent: int) -> None:
         if self.local_control is None or not self.serial:
@@ -854,13 +906,17 @@ class Session:
             self.last_client_func = frame.func
             if self.serial:
                 self.app.sessions_by_serial[self.serial] = self
+                # A handler may still reference the previous Session after a
+                # reconnect. Leave discovery in place until product info tells
+                # us whether to re-announce or clear it, but stop accepting
+                # commands while compatibility is unknown.
+                self.app.mqtt.unregister_active_power_limit_handler(self.serial)
                 self.firmware_uploader = FirmwareUploader(
                     self.app.logger.emit,
                     self.session_id,
                     self.serial,
                 )
             self.app.logger.emit("registration", session=self.session_id, serial=self.serial or "")
-            self._maybe_wire_active_power_limit_mqtt()
         elif self.client_device_tail and frame.device[1:] == self.client_device_tail:
             self.last_client_func = frame.func
         if is_product_info(frame):
@@ -868,6 +924,7 @@ class Session:
             self.model = info.get("model", "") or self.model
             self.firmware = info.get("firmware", "") or self.firmware
             self.app.logger.emit("product_info", session=self.session_id, serial=self.serial or "", **info)
+            self._sync_active_power_limit_mqtt()
         if is_module_info(frame):
             module = module_info(frame)
             if module:
@@ -903,13 +960,8 @@ class Session:
                 mesh_peer_serial=self.mesh_peer_serial,
             )
             self.app.publish_telemetry(self.session_id, telemetry, raw_nonzero_u16=nonzero_u16_words(frame.payload))
-            if (
-                self.last_telemetry_at is None
-                and self.local_control is not None
-                and self._inverter_control_command_registered
-            ):
-                asyncio.create_task(self._settle_inverter_control())
             self.last_telemetry_at = time.time()
+            self._maybe_settle_inverter_control()
         if is_modbus_read_response(frame):
             pdu = parse_modbus_read_response(frame)
             key = normalize_device(bytes(frame.device))
