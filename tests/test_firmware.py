@@ -341,7 +341,7 @@ class FirmwareTransferTest(unittest.IsolatedAsyncioTestCase):
                 make_frame(
                     b"\x7f\x7f",
                     b"\xaf\x00\x00\x01",
-                    1,
+                    request.func,
                     magic + b"\x00" + bytes([percent]),
                     b"\xf7\xf7",
                 )

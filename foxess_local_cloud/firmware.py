@@ -547,6 +547,12 @@ class FirmwareUploader:
         variant = self._variant
         if not self.active or variant is None or not frame.payload.startswith(variant.magic):
             return False
+        # Progress frames use a separate device tail, and their function byte
+        # can collide with the dynamically selected request function. Classify
+        # their unambiguous seven-byte payload before applying ack-tail checks.
+        if frame.family == "7f" and len(frame.payload) == 7 and frame.payload[5] == 0:
+            self._progress_queue.put_nowait(frame.payload[6])
+            return True
         # The original 1.84 cloud transfer sends requests in 7e/A2 frames,
         # but the inverter acknowledges them in 7f frames with the same
         # function and request tail. The newer variant uses 7f both ways.
@@ -556,9 +562,6 @@ class FirmwareUploader:
             future = self._ack_future
             if future is not None and not future.done():
                 future.set_result(frame.payload)
-            return True
-        if frame.family == "7f" and len(frame.payload) == 7 and frame.payload[5] == 0:
-            self._progress_queue.put_nowait(frame.payload[6])
             return True
         return False
 

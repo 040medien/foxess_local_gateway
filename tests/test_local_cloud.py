@@ -1876,6 +1876,13 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
         topic = app.mqtt.active_power_limit_command_topic(TEST_SERIAL)
         self.assertNotIn(topic, app.mqtt._command_handlers)
+        cleared = [
+            (published_topic, payload, retain)
+            for published_topic, payload, retain in client.published
+            if "active_power_limit" in published_topic and published_topic.endswith("/config")
+        ]
+        self.assertEqual(len(cleared), 2)
+        self.assertTrue(all(payload == "" and retain for _topic, payload, retain in cleared))
 
         old_product = extract_frames(bytearray(product_info_frame(firmware="1.79")))[0]
         await session.handle_frame(old_product, writer, send_bootstrap=False)  # type: ignore[arg-type]

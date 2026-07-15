@@ -907,10 +907,11 @@ class Session:
             if self.serial:
                 self.app.sessions_by_serial[self.serial] = self
                 # A handler may still reference the previous Session after a
-                # reconnect. Leave discovery in place until product info tells
-                # us whether to re-announce or clear it, but stop accepting
-                # commands while compatibility is unknown.
+                # reconnect. Until product info proves compatibility, remove
+                # both the command path and retained discovery so normal
+                # telemetry cannot make a stale, non-functional slider online.
                 self.app.mqtt.unregister_active_power_limit_handler(self.serial)
+                self.app.mqtt.clear_active_power_limit_discovery(self.serial)
                 self.firmware_uploader = FirmwareUploader(
                     self.app.logger.emit,
                     self.session_id,
