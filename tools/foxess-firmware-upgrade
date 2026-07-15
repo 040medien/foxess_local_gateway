@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Safely send a captured FoxESS firmware image through the local gateway."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import socket
+import sys
+from pathlib import Path
+
+
+DEFAULT_SOCKET = Path("/run/foxess-local-cloud/firmware.sock")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Upload a captured FoxESS firmware image to one connected inverter.",
+    )
+    parser.add_argument("image", type=Path, help="firmware .bin file")
+    parser.add_argument("--serial", required=True, help="exact target inverter serial")
+    verification = parser.add_mutually_exclusive_group(required=True)
+    verification.add_argument("--manifest", type=Path, help="capture manifest containing the official SHA-256")
+    verification.add_argument("--sha256", help="expected official SHA-256")
+    verification.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help="dangerous: permit an image with no official/captured hash",
+    )
+    parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET, help="gateway control socket")
+    parser.add_argument(
+        "--protocol",
+        choices=(
+            "auto", "foxess-7f-dynamic", "foxess-7f-func-a2",
+            "foxess-7f-func-99", "foxess-7e-func-a2",
+        ),
+        default="auto",
+        help="wire variant; auto uses the manifest or the current dynamic 7f variant",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="validate and print metadata without uploading")
+    parser.add_argument("--yes", action="store_true", help="confirm the real firmware upload")
+    return parser.parse_args()
+
+
+def expected_hash(args: argparse.Namespace, data: bytes) -> str:
+    if args.manifest:
+        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+        value = str(manifest.get("sha256", "")).lower()
+        if int(manifest.get("size", -1)) != len(data):
+            raise ValueError("image size does not match the capture manifest")
+    else:
+        value = str(args.sha256 or "").lower()
+    if value and (len(value) != 64 or any(char not in "0123456789abcdef" for char in value)):
+        raise ValueError("expected SHA-256 must be 64 hexadecimal characters")
+    actual = hashlib.sha256(data).hexdigest()
+    if value and actual != value:
+        raise ValueError(f"SHA-256 mismatch: expected {value}, got {actual}")
+    return value
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        data = args.image.read_bytes()
+        if not data:
+            raise ValueError("firmware image is empty")
+        if len(data) > 0xFFFF:
+            raise ValueError("firmware image exceeds the protocol's 65535-byte size field")
+        verified_hash = expected_hash(args, data)
+        manifest_protocol = ""
+        if args.manifest:
+            manifest_protocol = str(
+                json.loads(args.manifest.read_text(encoding="utf-8")).get("protocol", "")
+            )
+        protocol = args.protocol
+        if protocol == "auto":
+            protocol = manifest_protocol or "foxess-7f-dynamic"
+        if protocol == "foxess-7f-func-99":
+            protocol = "foxess-7f-dynamic"
+        if protocol not in (
+            "foxess-7f-dynamic", "foxess-7f-func-a2", "foxess-7e-func-a2",
+        ):
+            raise ValueError(f"unsupported protocol in manifest: {protocol!r}")
+        actual_hash = hashlib.sha256(data).hexdigest()
+        summary = {
+            "filename": args.image.name,
+            "serial": args.serial,
+            "size": len(data),
+            "sha256": actual_hash,
+            "verified": bool(verified_hash),
+            "protocol": protocol,
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        if args.dry_run:
+            return 0
+        if not args.yes:
+            raise ValueError("refusing to flash without --yes; use --dry-run to validate only")
+        header = {
+            "command": "upgrade",
+            "filename": args.image.name,
+            "serial": args.serial,
+            "size": len(data),
+            "sha256": verified_hash,
+            "allow_unverified": bool(args.allow_unverified),
+            "protocol": protocol,
+        }
+        encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(360)
+            client.connect(str(args.socket))
+            client.sendall(len(encoded).to_bytes(4, "big") + encoded + data)
+            response = bytearray()
+            while not response.endswith(b"\n"):
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                response.extend(chunk)
+        result = json.loads(response.decode("utf-8"))
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result.get("ok") else 1
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,6 +1,9 @@
 # FoxESS M1/Q1 Local Gateway
 
-A Raspberry Pi gateway for FoxESS M1 and Q1 microinverters.
+A Raspberry Pi gateway for FoxESS M1 and Q1 microinverters. The WEG
+SIW100G and FHE-MASTER microinverter families are also likely compatible:
+their firmware contains the same platform identifiers, although they have not
+yet been tested with this gateway.
 Provisions inverters directly over Bluetooth, decodes their local
 telemetry, and publishes it to MQTT with Home Assistant auto-discovery —
 the FoxESS app and cloud are not needed at any point.
@@ -9,9 +12,9 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
-- Writable `Active Power Limit` slider in Home Assistant for
-  curtailment during negative electricity prices or demand-charge avoidance (German
-  Nulleinspeisung).
+- Writable `Active Power Limit` slider in Home Assistant for curtailment during
+  negative electricity prices or demand-charge avoidance (German
+  Nulleinspeisung); requires inverter firmware 1.80 or newer.
 - No data leaves your network, including during initial setup — the Pi can
   provision the inverter directly over Bluetooth, so the FoxCloud mobile
   app is optional.
@@ -60,6 +63,8 @@ The Raspberry Pi runs four pieces:
   - Q1-2000-E
   - Q1-2400-E
   - Q1-2500-E
+  - Likely: WEG SIW100G M006/M008/M010/M012 W00 and FHE-MASTER
+    600/800/1000/1200 (community testing wanted)
 - Home Assistant with the Mosquitto Broker app
 
 ## Tested
@@ -86,9 +91,9 @@ Tested:
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
 - Local control: writable `Active Power Limit` HA entity and Modbus
-  polling at configurable cadence (see *Inverter Control* in the
-  runbook). Unit-tested end-to-end; live verification on an M1-800-E
-  in progress.
+  access (see *Inverter Control* in the runbook). `Active Power Limit`
+  requires inverter firmware 1.80 or newer. Unit-tested end-to-end; live
+  verification on an M1-800-E in progress.
 
 Not yet tested (please let me know if you were able to test it):
 
@@ -100,6 +105,9 @@ Not yet tested (please let me know if you were able to test it):
   foxess-local-cloud.service > foxess.log`)** so we can extend the decoder.
 - Other FoxESS inverter families (three-phase, AIO, EVO etc. — likely
   won't work without separate protocol work).
+- WEG SIW100G and FHE-MASTER rebrands. Their names and matching M1 platform
+  identifiers are embedded in the captured FoxESS firmware, so support is
+  likely, but this has not yet been confirmed on physical hardware.
 
 ## Home Assistant Prerequisites
 
@@ -304,6 +312,39 @@ Disable it for local-only operation:
 sudo ./installer/install_pi_zero_gateway.sh --no-relay
 ```
 
+## Firmware Version And Upgrades
+
+The local `Active Power Limit` control requires inverter firmware **1.80 or
+newer**. It is confirmed unavailable on 1.66 and available on 1.80; FoxCloud
+did not offer 1.77 for a direct boundary test. The current version appears in
+the Home Assistant device information
+and in the gateway's `product_info` log event. The gateway only publishes the
+Home Assistant slider and subscribes to its command topic after the inverter
+reports a parseable version of 1.80 or newer. Older or unknown versions have
+any retained `Active Power Limit` discovery entities removed automatically.
+
+FoxESS makes firmware updates available through a FoxCloud 2.0 installer
+account. The exact versions offered depend on the account, region, and device:
+
+1. In FoxCloud 2.0, create an account and select **Installer & Admin** (older
+   app versions label this **I am an installer/distributor**). Create or join
+   your installer organisation.
+2. Add the plant/device by scanning its QR code or entering its serial number.
+3. Open **Device**, select the inverter, open its serial-number detail page,
+   then select **Version**.
+4. Select the offered firmware, choose **Upgrade Now**, and keep the inverter
+   powered and online until the operation finishes.
+
+These steps follow the official [FoxCloud 2.0 App User
+Manual](https://www.fox-ess.com/Public/Uploads/uploadfile/files/20260212/ENFoxCloud2.0AppUserManual.pdf).
+FoxESS is rolling app-based firmware upgrades out by product, so contact your
+installer or FoxESS support if no version is offered for an M1/Q1 device.
+
+The gateway also has research tools to capture a cloud-supplied firmware image
+without installing it, and to install a previously captured, hash-verified
+image later. These are intentionally separate from normal operation; see
+[the firmware research and recovery section](LOCAL_CLOUD_PI.md#firmware-capture-and-local-upgrade).
+
 ## FAQ
 
 ### Why does this work?
@@ -437,6 +478,10 @@ should only be touched by a certified installer in coordination
 with your grid operator. If you need one changed, ask your
 installer to do it via the FoxESS portal.
 
+`Active Power Limit` itself requires inverter firmware 1.80 or newer. If the
+slider's write is acknowledged but the output does not change, check the
+reported firmware version before investigating the Modbus exchange.
+
 ### Can the gateway update telemetry faster than ~90 seconds?
 
 No. We mapped the inverter's full Modbus surface looking for a
@@ -450,6 +495,25 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-07-15
+
+- **Power-limit controls are firmware-gated.** The Home Assistant `Active
+  Power Limit` slider and its MQTT command handler are exposed only after the
+  inverter reports firmware 1.80 or newer. Older or unparseable versions also
+  clear retained discovery left by a previous supported firmware session.
+- **Firmware capture and controlled local upgrades.** An opt-in relay mode can
+  intercept a FoxCloud firmware push, save the verified binary and manifest,
+  and simulate acknowledgements/progress without passing the update to the
+  inverter. It preserves the official cloud filename and records the observed
+  transfer dialect. A separate root-only command can later upload a captured
+  image to a connected inverter and normally requires its official SHA-256
+  hash. Mesh upgrades are verified after reboot because a follower can finish
+  an internally handed-off upgrade even when the local command times out.
+- **Firmware compatibility is documented.** Local `Active Power Limit` now
+  explicitly requires firmware 1.80 or newer, with minimal official FoxCloud
+  2.0 installer upgrade steps. WEG SIW100G and FHE-MASTER models are listed as
+  likely, but not yet physically tested, compatible M1-family rebrands.
 
 ### 2026-07-13
 

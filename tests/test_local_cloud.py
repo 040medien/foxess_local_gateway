@@ -19,7 +19,7 @@ from foxess_local_cloud.protocol import (
     product_info,
     registration_serial,
 )
-from foxess_local_cloud.server import FOXESS_UPSTREAM_CERT_SHA256, FoxessLocalCloud, Session, check_upstream_cert
+from foxess_local_cloud.server import FOXESS_UPSTREAM_CERT_SHA256, FoxessLocalCloud, Session, check_upstream_cert, supports_active_power_limit
 from foxess_local_cloud.telemetry import FAULT_CODE_NAMES, Telemetry, decode_telemetry, fault_code_for, fault_code_message_for, is_known_fault_code, nonzero_u16_words, u32_wordswapped
 
 
@@ -34,12 +34,13 @@ def registration_frame(serial: str = TEST_SERIAL, marker: bytes = b"\x31") -> by
     return make_frame(b"\x7e\x7e", b"\x2a\x6a\x20\xe8", 0x8F, payload, b"\xe7\xe7")
 
 
-def product_info_frame(model: str = "M1-800-E") -> bytes:
+def product_info_frame(model: str = "M1-800-E", firmware: str = "1.80") -> bytes:
     payload = bytearray(108)
     payload[0:6] = b"M1V180"
     payload[32:34] = b"M1"
     payload[42 : 42 + len(model)] = model.encode("ascii")
-    payload[76:80] = b"1.80"
+    firmware_bytes = firmware.encode("ascii")
+    payload[76 : 76 + len(firmware_bytes)] = firmware_bytes
     return make_frame(b"\x7e\x7e", b"\x01\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")
 
 
@@ -158,6 +159,9 @@ class FakeMqttClient:
     def subscribe(self, *args: object, **kwargs: object) -> None:
         self.calls.append(("subscribe", args, kwargs))
 
+    def unsubscribe(self, *args: object, **kwargs: object) -> None:
+        self.calls.append(("unsubscribe", args, kwargs))
+
     def connect_async(self, *args: object, **kwargs: object) -> None:
         self.calls.append(("connect_async", args, kwargs))
         if self.fail_connect:
@@ -195,6 +199,14 @@ class FakeStreamWriter:
 
 
 class LocalCloudProtocolTest(unittest.TestCase):
+    def test_active_power_limit_firmware_version_gate(self) -> None:
+        for firmware in ("1.80", "1.81", "1.84", "v1.80", "1.80.1", "2.0"):
+            with self.subTest(firmware=firmware):
+                self.assertTrue(supports_active_power_limit(firmware))
+        for firmware in ("", "unknown", "1.66", "1.79", "1.8", "M1V184"):
+            with self.subTest(firmware=firmware):
+                self.assertFalse(supports_active_power_limit(firmware))
+
     def test_config_loads_relay_and_mqtt(self) -> None:
         cfg = load_config(ROOT / "local-cloud.example.json")
         self.assertFalse(cfg.relay.enabled)
@@ -1803,6 +1815,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         session = Session(app, 1)
         session.serial = TEST_SERIAL
         session.model = "M1-800-E"
+        session.firmware = "1.80"
 
         class ClosableWriter(FakeStreamWriter):
             def close(self) -> None:
@@ -1835,6 +1848,123 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
             1,
             "subsequent telemetry must not re-trigger the read",
         )
+
+    async def test_active_power_limit_not_exposed_before_compatible_firmware(self) -> None:
+        import asyncio
+
+        from foxess_local_cloud.config import InverterControl
+
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(
+            AppConfig(
+                mqtt=MqttConfig(host="mqtt.local"),
+                inverter_control=InverterControl(enabled=True),
+            )
+        )
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+        session = Session(app, 1)
+
+        class ClosableWriter(FakeStreamWriter):
+            def close(self) -> None:
+                return None
+
+        writer = ClosableWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+        registration = extract_frames(bytearray(registration_frame()))[0]
+        await session.handle_frame(registration, writer, send_bootstrap=False)  # type: ignore[arg-type]
+
+        topic = app.mqtt.active_power_limit_command_topic(TEST_SERIAL)
+        self.assertNotIn(topic, app.mqtt._command_handlers)
+        cleared = [
+            (published_topic, payload, retain)
+            for published_topic, payload, retain in client.published
+            if "active_power_limit" in published_topic and published_topic.endswith("/config")
+        ]
+        self.assertEqual(len(cleared), 2)
+        self.assertTrue(all(payload == "" and retain for _topic, payload, retain in cleared))
+
+        old_product = extract_frames(bytearray(product_info_frame(firmware="1.79")))[0]
+        await session.handle_frame(old_product, writer, send_bootstrap=False)  # type: ignore[arg-type]
+        self.assertNotIn(topic, app.mqtt._command_handlers)
+        cleared = [
+            (published_topic, payload, retain)
+            for published_topic, payload, retain in client.published
+            if "active_power_limit" in published_topic and published_topic.endswith("/config")
+        ]
+        self.assertEqual(len(cleared), 2)
+        self.assertTrue(all(payload == "" and retain for _topic, payload, retain in cleared))
+
+        telemetry = extract_frames(bytearray(telemetry_frame()))[0]
+        await session.handle_frame(telemetry, writer, send_bootstrap=False)  # type: ignore[arg-type]
+        await asyncio.sleep(0)
+        self.assertEqual(len(session.local_control._outstanding), 0)  # type: ignore[union-attr]
+
+    async def test_active_power_limit_exposed_at_minimum_firmware(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(
+            AppConfig(
+                mqtt=MqttConfig(host="mqtt.local"),
+                inverter_control=InverterControl(enabled=True),
+            )
+        )
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+        session = Session(app, 1)
+        writer = FakeStreamWriter()
+
+        registration = extract_frames(bytearray(registration_frame()))[0]
+        await session.handle_frame(registration, writer, send_bootstrap=False)
+        product = extract_frames(bytearray(product_info_frame(firmware="1.80")))[0]
+        await session.handle_frame(product, writer, send_bootstrap=False)
+
+        topic = app.mqtt.active_power_limit_command_topic(TEST_SERIAL)
+        self.assertIn(topic, app.mqtt._command_handlers)
+        discovery = [
+            payload
+            for published_topic, payload, retain in client.published
+            if published_topic.endswith("/active_power_limit/config") and retain and payload
+        ]
+        self.assertEqual(len(discovery), 1)
+        self.assertEqual(json.loads(discovery[0])["name"], "Active Power Limit")
+
+    async def test_active_power_limit_settles_when_product_info_follows_telemetry(self) -> None:
+        """Mesh followers may send telemetry before product info. Learning a
+        compatible firmware later must still trigger exactly one startup read."""
+        import asyncio
+
+        from foxess_local_cloud.config import InverterControl
+
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(
+            AppConfig(
+                mqtt=MqttConfig(host="mqtt.local"),
+                inverter_control=InverterControl(enabled=True),
+            )
+        )
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+        session = Session(app, 1)
+        writer = FakeStreamWriter()
+        session.local_control.attach_inverter_writer(writer)  # type: ignore[union-attr]
+
+        registration = extract_frames(bytearray(registration_frame()))[0]
+        await session.handle_frame(registration, writer, send_bootstrap=False)
+        telemetry = extract_frames(bytearray(telemetry_frame()))[0]
+        await session.handle_frame(telemetry, writer, send_bootstrap=False)
+        await asyncio.sleep(0)
+        self.assertEqual(len(session.local_control._outstanding), 0)  # type: ignore[union-attr]
+
+        product = extract_frames(bytearray(product_info_frame(firmware="1.80")))[0]
+        await session.handle_frame(product, writer, send_bootstrap=False)
+        await asyncio.sleep(0)
+        self.assertEqual(len(session.local_control._outstanding), 1)  # type: ignore[union-attr]
+
+        await session.handle_frame(product, writer, send_bootstrap=False)
+        await asyncio.sleep(0)
+        self.assertEqual(len(session.local_control._outstanding), 1)  # type: ignore[union-attr]
 
     def test_mqtt_active_power_limit_discovery_idempotent_per_serial(self) -> None:
         client = FakeMqttClient()

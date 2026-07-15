@@ -14,7 +14,7 @@ redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
 A writable `Active Power Limit` slider for Home Assistant is enabled
-by default — see *Inverter Control* below.
+by default on inverter firmware 1.80 or newer — see *Inverter Control* below.
 
 ## Networking Model
 
@@ -314,14 +314,94 @@ Disable relay for fully local operation:
 sudo ./installer/install_pi_zero_gateway.sh --no-relay
 ```
 
+## Firmware Capture And Local Upgrade
+
+This is a research/recovery workflow, not part of normal gateway operation.
+Keep the inverter powered throughout any real upgrade. A wrong or interrupted
+image can leave it unbootable, and no local recovery procedure is known.
+
+### Capture an offered FoxCloud image without flashing it
+
+Reinstall with relay and capture enabled:
+
+```bash
+sudo ./installer/install_pi_zero_gateway.sh --relay --firmware-capture
+sudo journalctl -u foxess-local-cloud -f
+```
+
+Then request the desired version in the FoxCloud 2.0 installer account. The
+gateway intercepts the complete firmware transfer, validates its protocol CRC,
+saves the image and a JSON manifest under:
+
+```text
+/var/lib/foxess-local-cloud/firmware-captures/
+```
+
+It returns the observed acknowledgements and progress sequence to FoxCloud but
+does **not** send the image to the inverter. Look for
+`firmware_capture_complete`, including the saved path and SHA-256, in the log.
+The filename in the metadata is length-prefixed; capture mode removes that
+length byte and preserves the official FoxCloud filename, including spaces and
+parentheses in regional image names.
+Disable capture immediately afterwards so a future upgrade is not intercepted:
+
+```bash
+sudo ./installer/install_pi_zero_gateway.sh --no-firmware-capture
+```
+
+Capture mode requires relay mode and its setting is preserved on reinstall
+until explicitly disabled.
+
+### Install a captured image locally
+
+Validate the image against the automatically generated capture manifest first:
+
+```bash
+sudo foxess-firmware-upgrade M1_example.bin \
+  --serial YOUR_INVERTER_SERIAL \
+  --manifest M1_example.bin.json \
+  --dry-run
+```
+
+Only after checking the target serial, filename, size, and hash, run the real
+upgrade:
+
+```bash
+sudo foxess-firmware-upgrade M1_example.bin \
+  --serial YOUR_INVERTER_SERIAL \
+  --manifest M1_example.bin.json \
+  --yes
+```
+
+The command uses the root/local Unix socket at
+`/run/foxess-local-cloud/firmware.sock`; it is not exposed on the network. It
+streams the same metadata and 1024-byte chunks observed from FoxCloud, waits
+for every inverter acknowledgement, then waits for 100% flash progress. The
+manifest selects the recorded wire-protocol variant automatically. Some `7f`
+transfers use the fixed `0xA2` function and transfer ID while others vary both;
+the capture records which form was observed. The manifest hash is required by
+default. `--allow-unverified` exists for
+development, but bypasses the most useful protection and should not be used on
+real hardware.
+
+On a mesh follower, an upgrade may be handed off internally after metadata and
+the command can time out without receiving the usual per-chunk acknowledgements.
+Do not immediately retry a timed-out mesh upgrade. Wait through the metadata
+timeout, then check `product_info` and fresh telemetry for the requested
+firmware; a tested follower completed its upgrade and rebooted despite the CLI
+timeout. A normal directly transferred upgrade must report every chunk, reach
+100%, reboot, and publish the new version before it is considered successful.
+
 ## Inverter Control
 
-Enabled by default. Exposes a writable `Active Power Limit` slider
-(0–100 %) in Home Assistant. No periodic polling — the daemon reads
-the current value once on the first telemetry frame so HA shows the
-live setpoint as soon as the inverter is producing, then writes
-whatever HA's slider sets and the response is stripped from the
-bytes forwarded to FoxCloud.
+Enabled by default. Exposes a writable `Active Power Limit` slider (0–100 %) in
+Home Assistant only after the inverter reports a parseable firmware version of
+1.80 or newer. Older or unknown versions have any retained slider discovery
+removed and their MQTT command topic is not handled. No periodic polling — the
+daemon reads the current value once on the first telemetry frame so HA shows
+the live setpoint as soon as the inverter is producing, then writes whatever
+HA's slider sets and the response is stripped from the bytes forwarded to
+FoxCloud.
 
 To turn it off:
 

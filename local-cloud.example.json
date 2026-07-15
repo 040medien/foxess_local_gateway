@@ -15,6 +15,12 @@
       "47.91.86.144": "47.91.86.144:14431"
     }
   },
+  "firmware_capture": {
+    "enabled": false,
+    "directory": "runtime/firmware-captures",
+    "simulate_progress": true
+  },
+  "firmware_control_socket": null,
   "devices": {},
   "mqtt": {
     "host": "",

@@ -57,6 +57,16 @@ class InverterControl:
 
 
 @dataclass(frozen=True)
+class FirmwareCaptureConfig:
+    """Opt-in interception of FoxCloud firmware pushes for research."""
+
+    enabled: bool = False
+    directory: Path = Path("runtime/firmware-captures")
+    simulate_progress: bool = True
+    progress_interval_seconds: float = 0.25
+
+
+@dataclass(frozen=True)
 class AppConfig:
     host: str = "0.0.0.0"
     port: int = 14431
@@ -74,6 +84,10 @@ class AppConfig:
     inverter_tcp_keepalive_seconds: int = 30
     relay: RelayConfig = field(default_factory=lambda: RelayConfig())
     inverter_control: InverterControl = field(default_factory=InverterControl)
+    firmware_capture: FirmwareCaptureConfig = field(default_factory=FirmwareCaptureConfig)
+    # Root/local maintenance interface used only by the separate firmware CLI.
+    # None disables it (the default for library/test configurations).
+    firmware_control_socket: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +121,7 @@ def load_config(path: Path | None) -> AppConfig:
     mqtt_raw = raw.get("mqtt", {}) or {}
     relay_raw = raw.get("relay", {}) or {}
     control_raw = raw.get("inverter_control", {}) or {}
+    capture_raw = raw.get("firmware_capture", {}) or {}
     upstreams: dict[str, tuple[str, int]] = {}
     for original, target in (relay_raw.get("upstreams", {}) or {}).items():
         host, port = str(target).rsplit(":", 1)
@@ -146,6 +161,17 @@ def load_config(path: Path | None) -> AppConfig:
             enabled=bool(control_raw.get("enabled", True)),
             active_power_limit_address=int(control_raw.get("active_power_limit_address", 0xCA5A)),
             write_timeout_seconds=float(control_raw.get("write_timeout_seconds", 3.0)),
+        ),
+        firmware_capture=FirmwareCaptureConfig(
+            enabled=bool(capture_raw.get("enabled", False)),
+            directory=Path(capture_raw.get("directory", "runtime/firmware-captures")),
+            simulate_progress=bool(capture_raw.get("simulate_progress", True)),
+            progress_interval_seconds=float(capture_raw.get("progress_interval_seconds", 0.25)),
+        ),
+        firmware_control_socket=(
+            Path(raw["firmware_control_socket"])
+            if raw.get("firmware_control_socket")
+            else None
         ),
     )
 

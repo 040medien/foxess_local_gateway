@@ -35,6 +35,7 @@ class MqttPublisher:
         # the Session that owns the inverter.
         self._command_handlers: dict[str, Callable[[str, str], None]] = {}
         self._active_power_limit_announced: set[str] = set()
+        self._active_power_limit_cleared: set[str] = set()
 
     @property
     def enabled(self) -> bool:
@@ -196,6 +197,32 @@ class MqttPublisher:
                 self.client.subscribe(topic)
             except Exception as exc:
                 self.emit("mqtt_subscribe_error", topic=topic, error=str(exc))
+
+    def unregister_active_power_limit_handler(self, serial: str) -> None:
+        """Stop accepting ActivePowerLimit commands for one inverter."""
+        topic = self.active_power_limit_command_topic(serial)
+        if self._command_handlers.pop(topic, None) is None:
+            return
+        if self.enabled and self.client is not None and hasattr(self.client, "unsubscribe"):
+            try:
+                self.client.unsubscribe(topic)
+            except Exception as exc:
+                self.emit("mqtt_unsubscribe_error", topic=topic, error=str(exc))
+
+    def clear_active_power_limit_discovery(self, serial: str) -> None:
+        """Remove retained HA entities when the firmware is unsupported."""
+        self._active_power_limit_announced.discard(serial)
+        if not self.enabled or self.client is None or not serial:
+            return
+        if serial in self._active_power_limit_cleared:
+            return
+        topics = (
+            f"{self.config.discovery_prefix}/number/foxess_{serial}/active_power_limit/config",
+            f"{self.config.discovery_prefix}/sensor/foxess_{serial}/active_power_limit_result/config",
+        )
+        for topic in topics:
+            self._publish(topic, "", retain=True)
+        self._active_power_limit_cleared.add(serial)
 
     def publish_active_power_limit_state(self, serial: str, value: int) -> None:
         if not self.enabled or self.client is None or not serial:
@@ -414,6 +441,7 @@ class MqttPublisher:
         }
         self._publish(result_config_topic, json.dumps(result_payload, separators=(",", ":")), retain=True)
         self._active_power_limit_announced.add(serial)
+        self._active_power_limit_cleared.discard(serial)
 
     def _publish_mesh_discovery(self, telemetry: Telemetry, device: dict[str, Any], state_topic: str) -> None:
         serial = telemetry.serial
