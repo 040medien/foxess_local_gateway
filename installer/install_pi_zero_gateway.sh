@@ -45,6 +45,8 @@ RELAY_ENABLED=false
 RELAY_ENABLED_SET=0
 INVERTER_CONTROL_ENABLED=true
 INVERTER_CONTROL_ENABLED_SET=0
+FIRMWARE_CAPTURE_ENABLED=false
+FIRMWARE_CAPTURE_ENABLED_SET=0
 FOXESS_CLOUD_IPS="8.209.116.72 47.91.86.144"
 FOXESS_CLOUD_HOSTS="foxesscloud.com"
 
@@ -96,6 +98,9 @@ Options:
                                     The write response is stripped from the upstream
                                     stream so FoxCloud sees no extra traffic.
   --disable-inverter-control        Disable the inverter control feature
+  --firmware-capture                Capture the next cloud firmware push without
+                                    passing it to the inverter (requires --relay)
+  --no-firmware-capture             Disable firmware capture
   --foxess-cloud-ip IP              Add a FoxESS relay upstream hint; repeatable
   --foxess-cloud-host HOST          Resolve this host as a FoxESS relay upstream hint; repeatable
   --no-nat                          Disable NAT from inverter AP to upstream Wi-Fi
@@ -263,6 +268,31 @@ preserve_existing_inverter_control_config() {
     existing_value=$(existing_inverter_control_field enabled "$existing_config")
     [[ -n "$existing_value" ]] && INVERTER_CONTROL_ENABLED=$existing_value
   fi
+  return 0
+}
+
+preserve_existing_firmware_capture_config() {
+  local existing_config=${FOXESS_EXISTING_CONFIG:-$CONFIG_DIR/config.json}
+  local existing_value
+  [[ "$FIRMWARE_CAPTURE_ENABLED_SET" != 1 ]] || return 0
+  [[ -r "$existing_config" ]] || return 0
+  existing_value=$(python3 - "$existing_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError):
+    raise SystemExit(0)
+enabled = (data.get("firmware_capture") or {}).get("enabled")
+if enabled is True:
+    print("true")
+elif enabled is False:
+    print("false")
+PY
+)
+  [[ -n "$existing_value" ]] && FIRMWARE_CAPTURE_ENABLED=$existing_value
   return 0
 }
 
@@ -489,6 +519,8 @@ while [[ $# -gt 0 ]]; do
     --no-relay) RELAY_ENABLED=false; RELAY_ENABLED_SET=1; shift ;;
     --enable-inverter-control) INVERTER_CONTROL_ENABLED=true; INVERTER_CONTROL_ENABLED_SET=1; shift ;;
     --disable-inverter-control) INVERTER_CONTROL_ENABLED=false; INVERTER_CONTROL_ENABLED_SET=1; shift ;;
+    --firmware-capture) FIRMWARE_CAPTURE_ENABLED=true; FIRMWARE_CAPTURE_ENABLED_SET=1; shift ;;
+    --no-firmware-capture) FIRMWARE_CAPTURE_ENABLED=false; FIRMWARE_CAPTURE_ENABLED_SET=1; shift ;;
     --foxess-cloud-ip) FOXESS_CLOUD_IPS="$FOXESS_CLOUD_IPS ${2:?}"; shift 2 ;;
     --foxess-cloud-host) FOXESS_CLOUD_HOSTS="$FOXESS_CLOUD_HOSTS ${2:?}"; shift 2 ;;
     --no-nat) ENABLE_NAT=0; shift ;;
@@ -514,6 +546,7 @@ if [[ "$APP_ONLY" = 1 ]]; then
     || die "--app-only requires an existing full install; run without --app-only first"
   echo "Redeploying FoxESS daemon code only (AP, nftables, and config left untouched)"
   systemctl stop foxess-local-cloud.service 2>/dev/null || true
+  install -d -o foxess -g foxess -m 0750 "$STATE_DIR/firmware-captures"
   sync_app_tree
   refresh_venv_for_app_only
   systemctl restart foxess-local-cloud.service
@@ -524,11 +557,19 @@ fi
 preserve_existing_mqtt_config
 preserve_existing_relay_config
 preserve_existing_inverter_control_config
+preserve_existing_firmware_capture_config
 
 case "$INVERTER_CONTROL_ENABLED" in
   true|false) ;;
   *) die "--enable-inverter-control / --disable-inverter-control flag produced unexpected value: $INVERTER_CONTROL_ENABLED" ;;
 esac
+case "$FIRMWARE_CAPTURE_ENABLED" in
+  true|false) ;;
+  *) die "--firmware-capture / --no-firmware-capture produced unexpected value: $FIRMWARE_CAPTURE_ENABLED" ;;
+esac
+if [[ "$FIRMWARE_CAPTURE_ENABLED" = true && "$RELAY_ENABLED" != true ]]; then
+  die "--firmware-capture requires --relay so FoxCloud can send the image"
+fi
 
 if [[ -z "$AP_PASSPHRASE" ]]; then
   AP_PASSPHRASE=$(existing_wifi_passphrase)
@@ -583,6 +624,7 @@ export AP_DHCP_START AP_DHCP_END AP_DHCP_LEASE FOXESS_CLOUD_IPS ENABLE_NAT ENABL
 export DAEMON_PORT=14431 MQTT_HOST MQTT_PORT MQTT_USERNAME_JSON MQTT_PASSWORD_JSON
 export PUBLISH_MIN_INTERVAL_SECONDS RELAY_ENABLED RELAY_UPSTREAMS_JSON DNSMASQ_ADDRESS_LINES
 export INVERTER_CONTROL_ENABLED
+export FIRMWARE_CAPTURE_ENABLED
 export DEVICES_JSON
 
 if [[ "$DRY_RUN" = 1 ]]; then
@@ -595,7 +637,6 @@ if [[ "$DRY_RUN" = 1 ]]; then
 else
   TARGET=
 fi
-
 dest() {
   if [[ "$DRY_RUN" = 1 ]]; then
     printf '%s/%s' "$TARGET" "$1"
@@ -636,6 +677,11 @@ echo "  Redirect:  $ENABLE_REDIRECT for AP-client tcp/14431"
 echo "  Upstreams: $FOXESS_CLOUD_IPS"
 echo "  MQTT:      ${MQTT_HOST:-disabled}"
 echo "  Relay:     $RELAY_ENABLED"
+if [[ "$FIRMWARE_CAPTURE_ENABLED" = true ]]; then
+  echo "  Firmware capture: enabled (cloud pushes are intercepted)"
+else
+  echo "  Firmware capture: disabled"
+fi
 if [[ "$INVERTER_CONTROL_ENABLED" = true ]]; then
   echo "  Inverter control: enabled (writable ActivePowerLimit via MQTT)"
 else
@@ -651,6 +697,7 @@ if [[ "$DRY_RUN" != 1 ]]; then
   id foxess >/dev/null 2>&1 || useradd --system --home "$STATE_DIR" --shell /usr/sbin/nologin foxess
   mkdir -p "$INSTALL_PREFIX" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
   chown foxess:foxess "$STATE_DIR" "$LOG_DIR"
+  install -d -o foxess -g foxess -m 0750 "$STATE_DIR/firmware-captures"
 fi
 
 if [[ "$SKIP_APP_COPY" = 1 && "$DRY_RUN" != 1 ]]; then
@@ -691,6 +738,7 @@ render_to "$ROOT_DIR/installer/templates/networkmanager-foxess.conf.template" "e
 install_file "$ROOT_DIR/installer/templates/foxess-pi-ap.sh" "usr/local/sbin/foxess-pi-ap" 0755
 install_file "$ROOT_DIR/installer/templates/foxess-gateway-status.sh" "usr/local/sbin/foxess-gateway-status" 0755
 install_file "$ROOT_DIR/installer/templates/foxess-ble-provision.sh" "usr/local/sbin/foxess-ble-provision" 0755
+install_file "$ROOT_DIR/installer/templates/foxess-firmware-upgrade.sh" "usr/local/sbin/foxess-firmware-upgrade" 0755
 install_file "$ROOT_DIR/installer/templates/logrotate-foxess-local-cloud.conf" "etc/logrotate.d/foxess-local-cloud" 0644
 install_file "$ROOT_DIR/installer/systemd/foxess-pi-ap.service" "etc/systemd/system/foxess-pi-ap.service" 0644
 install_file "$ROOT_DIR/installer/systemd/foxess-hostapd.service" "etc/systemd/system/foxess-hostapd.service" 0644

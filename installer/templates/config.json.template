@@ -28,5 +28,11 @@
   },
   "inverter_control": {
     "enabled": ${INVERTER_CONTROL_ENABLED}
-  }
+  },
+  "firmware_capture": {
+    "enabled": ${FIRMWARE_CAPTURE_ENABLED},
+    "directory": "/var/lib/foxess-local-cloud/firmware-captures",
+    "simulate_progress": true
+  },
+  "firmware_control_socket": "/run/foxess-local-cloud/firmware.sock"
 }

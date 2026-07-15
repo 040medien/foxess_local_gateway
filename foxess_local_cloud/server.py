@@ -15,6 +15,7 @@ from typing import Any, TextIO
 
 from .cert import ensure_cert
 from .config import AppConfig
+from .firmware import FirmwareCapture, FirmwareImage, FirmwareProtocolError, FirmwareUploader
 from .local_control import LocalControl, WRITE_CONFIRMED, normalize_device
 from .mqtt import MqttPublisher
 from .protocol import (
@@ -124,6 +125,7 @@ class FoxessLocalCloud:
         # write could leave the inverter stuck at the intervening value.
         self._active_power_limit_gen: dict[str, int] = {}
         self._active_power_limit_confirmed_gen: dict[str, int] = {}
+        self.sessions_by_serial: dict[str, Session] = {}
 
     def set_desired_active_power_limit(self, serial: str, percent: int) -> int:
         """Record a new desired setpoint and return its command generation."""
@@ -173,12 +175,83 @@ class FoxessLocalCloud:
         server = await asyncio.start_server(self.handle_client, self.config.host, self.config.port, ssl=self.ssl_context())
         sockets = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
         self.logger.emit("listen", sockets=sockets)
-        async with server:
-            watchdog = asyncio.create_task(self._mqtt_watchdog())
+        control_server: asyncio.AbstractServer | None = None
+        control_path = self.config.firmware_control_socket
+        if control_path is not None:
+            control_path.parent.mkdir(parents=True, exist_ok=True)
+            control_path.unlink(missing_ok=True)
+            control_server = await asyncio.start_unix_server(self.handle_firmware_control, path=control_path)
+            control_path.chmod(0o600)
+            self.logger.emit("firmware_control_listen", path=str(control_path))
+        watchdog = asyncio.create_task(self._mqtt_watchdog())
+        tasks = [asyncio.create_task(server.serve_forever())]
+        if control_server is not None:
+            tasks.append(asyncio.create_task(control_server.serve_forever()))
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            watchdog.cancel()
+            for task in tasks:
+                task.cancel()
+            server.close()
+            await server.wait_closed()
+            if control_server is not None:
+                control_server.close()
+                await control_server.wait_closed()
+            if control_path is not None:
+                control_path.unlink(missing_ok=True)
+
+    async def handle_firmware_control(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Receive one root/local firmware upload request over the Unix socket."""
+        response: dict[str, Any]
+        try:
+            header_size = int.from_bytes(await reader.readexactly(4), "big")
+            if not 0 < header_size <= 65536:
+                raise FirmwareProtocolError("invalid firmware control header size")
+            header = json.loads((await reader.readexactly(header_size)).decode("utf-8"))
+            if header.get("command") != "upgrade":
+                raise FirmwareProtocolError("unsupported firmware control command")
+            size = int(header.get("size", 0))
+            if not 0 < size <= 0xFFFF:
+                raise FirmwareProtocolError("invalid firmware image size")
+            data = await reader.readexactly(size)
+            serial = str(header.get("serial", ""))
+            image = FirmwareImage.from_bytes(data, str(header.get("filename", "firmware.bin")))
+            expected_sha256 = str(header.get("sha256", "")).lower()
+            allow_unverified = bool(header.get("allow_unverified", False))
+            if not expected_sha256 and not allow_unverified:
+                raise FirmwareProtocolError("an expected SHA-256 is required")
+            if expected_sha256 and (
+                len(expected_sha256) != 64
+                or any(char not in "0123456789abcdef" for char in expected_sha256)
+            ):
+                raise FirmwareProtocolError("expected SHA-256 must be 64 hexadecimal characters")
+            if expected_sha256 and image.sha256 != expected_sha256:
+                raise FirmwareProtocolError(
+                    f"SHA-256 mismatch: expected {expected_sha256}, got {image.sha256}"
+                )
+            session = self.sessions_by_serial.get(serial)
+            if session is None:
+                raise FirmwareProtocolError(f"inverter {serial!r} is not connected")
+            protocol = str(header.get("protocol", "foxess-7f-func-99"))
+            response = await session.upload_firmware(image, protocol=protocol)
+            response["ok"] = True
+        except Exception as exc:
+            response = {"ok": False, "error": str(exc) or type(exc).__name__}
+            self.logger.emit("firmware_control_error", error=response["error"])
+        try:
+            writer.write((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+            await writer.drain()
+        finally:
+            writer.close()
             try:
-                await server.serve_forever()
-            finally:
-                watchdog.cancel()
+                await writer.wait_closed()
+            except Exception:
+                pass
 
     async def _mqtt_watchdog(self) -> None:
         """Periodically verify the MQTT network loop is alive and rebuild the
@@ -213,6 +286,8 @@ class FoxessLocalCloud:
                 disconnect_reason = "session_error"
                 self.logger.emit("session_error", session=session_id, error=str(exc))
         finally:
+            if session.serial and self.sessions_by_serial.get(session.serial) is session:
+                self.sessions_by_serial.pop(session.serial, None)
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -278,6 +353,21 @@ class Session:
         self.pending_writes: dict[bytes, tuple[int, int]] = {}
         self.local_control: LocalControl | None = None
         self._inverter_control_command_registered = False
+        self.inverter_writer: asyncio.StreamWriter | None = None
+        self.client_device_tail = b""
+        self.last_client_func = 0
+        self.firmware_uploader: FirmwareUploader | None = None
+        self._firmware_upload_lock = asyncio.Lock()
+        capture_config = app.config.firmware_capture
+        self.firmware_capture: FirmwareCapture | None = None
+        if capture_config.enabled:
+            self.firmware_capture = FirmwareCapture(
+                capture_config.directory,
+                self.app.logger.emit,
+                self.session_id,
+                simulate_progress=capture_config.simulate_progress,
+                progress_interval_seconds=capture_config.progress_interval_seconds,
+            )
         if app.config.inverter_control.enabled:
             self.local_control = LocalControl(
                 emit=self.app.logger.emit,
@@ -509,6 +599,7 @@ class Session:
         await self.run_local(reader, writer)
 
     async def run_local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.inverter_writer = writer
         if self.local_control is not None:
             self.local_control.attach_inverter_writer(writer)
         while True:
@@ -517,6 +608,7 @@ class Session:
                 return
             self.buffer.extend(data)
             for frame in extract_frames(self.buffer):
+                self._handle_firmware_upload_frame(frame)
                 await self.handle_frame(frame, writer)
 
     async def run_relay(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -572,11 +664,12 @@ class Session:
                 await self.run_local(reader, writer)
                 return
         self.app.logger.emit("relay_connected", session=self.session_id, upstream_host=upstream_host, upstream_port=upstream_port)
+        self.inverter_writer = writer
         if self.local_control is not None:
             self.local_control.attach_inverter_writer(writer)
         await asyncio.gather(
             self.relay_client_to_upstream(reader, upstream_writer),
-            self.relay_upstream_to_client(upstream_reader, writer),
+            self.relay_upstream_to_client(upstream_reader, writer, upstream_writer),
         )
 
     def choose_upstream(self, original_ip: str | None) -> tuple[str, int] | None:
@@ -607,24 +700,39 @@ class Session:
                 consumed = snapshot[: len(snapshot) - len(leftover)]
                 forward = bytearray(consumed)
                 for frame in frames:
+                    firmware_owned = self._handle_firmware_upload_frame(frame)
                     await self.handle_frame(frame, upstream_writer, send_bootstrap=False)
-                    if self.local_control is not None and self.local_control.is_our_frame(frame):
+                    local_control_owned = self.local_control is not None and self.local_control.is_our_frame(frame)
+                    if local_control_owned or firmware_owned:
                         idx = forward.find(frame.raw)
                         if idx >= 0:
                             del forward[idx : idx + len(frame.raw)]
-                        self.app.logger.emit(
-                            "injected_response_filtered",
-                            session=self.session_id,
-                            device=frame.device.hex(),
-                            bytes=len(frame.raw),
-                        )
+                        if local_control_owned:
+                            self.app.logger.emit(
+                                "injected_response_filtered",
+                                session=self.session_id,
+                                device=frame.device.hex(),
+                                bytes=len(frame.raw),
+                            )
+                        if firmware_owned:
+                            self.app.logger.emit(
+                                "firmware_upload_response_filtered",
+                                session=self.session_id,
+                                device=frame.device.hex(),
+                                bytes=len(frame.raw),
+                            )
                 if forward:
                     upstream_writer.write(bytes(forward))
                     await upstream_writer.drain()
         finally:
             upstream_writer.close()
 
-    async def relay_upstream_to_client(self, upstream_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def relay_upstream_to_client(
+        self,
+        upstream_reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        upstream_writer: asyncio.StreamWriter | None = None,
+    ) -> None:
         try:
             while True:
                 data = await upstream_reader.read(4096)
@@ -632,10 +740,29 @@ class Session:
                     return
                 self.app.logger.emit("relay_decrypted", session=self.session_id, direction="upstream_to_client", bytes=len(data), payload_hex=data.hex(" "))
                 self.upstream_buffer.extend(data)
-                for frame in extract_frames(self.upstream_buffer):
+                snapshot = bytes(self.upstream_buffer)
+                frames = extract_frames(self.upstream_buffer)
+                leftover = bytes(self.upstream_buffer)
+                consumed = snapshot[: len(snapshot) - len(leftover)]
+                forward = bytearray(consumed)
+                for frame in frames:
                     self.handle_upstream_frame(frame)
-                writer.write(data)
-                await writer.drain()
+                    captured = False
+                    if self.firmware_capture is not None and upstream_writer is not None:
+                        captured = await self.firmware_capture.handle_upstream_frame(
+                            frame,
+                            serial=self.serial or "",
+                            upstream_writer=upstream_writer,
+                            client_device_tail=self.client_device_tail,
+                            last_client_func=self.last_client_func,
+                        )
+                    if captured:
+                        idx = forward.find(frame.raw)
+                        if idx >= 0:
+                            del forward[idx:idx + len(frame.raw)]
+                if forward:
+                    writer.write(bytes(forward))
+                    await writer.drain()
         finally:
             writer.close()
 
@@ -723,8 +850,19 @@ class Session:
                 self.app.mqtt.publish_active_power_limit_state(self.serial, int(pending_write[1]))
         if is_registration(frame):
             self.serial = registration_serial(frame)
+            self.client_device_tail = frame.device[1:]
+            self.last_client_func = frame.func
+            if self.serial:
+                self.app.sessions_by_serial[self.serial] = self
+                self.firmware_uploader = FirmwareUploader(
+                    self.app.logger.emit,
+                    self.session_id,
+                    self.serial,
+                )
             self.app.logger.emit("registration", session=self.session_id, serial=self.serial or "")
             self._maybe_wire_active_power_limit_mqtt()
+        elif self.client_device_tail and frame.device[1:] == self.client_device_tail:
+            self.last_client_func = frame.func
         if is_product_info(frame):
             info = product_info(frame)
             self.model = info.get("model", "") or self.model
@@ -840,6 +978,26 @@ class Session:
                     error="modbus_exception",
                     modbus_exception_code=pdu["exception_code"],
                 )
+
+    def _handle_firmware_upload_frame(self, frame: Frame) -> bool:
+        uploader = self.firmware_uploader
+        return uploader.handle_client_frame(frame) if uploader is not None else False
+
+    async def upload_firmware(
+        self,
+        image: FirmwareImage,
+        *,
+        protocol: str = "foxess-7f-func-99",
+    ) -> dict[str, Any]:
+        writer = self.inverter_writer
+        uploader = self.firmware_uploader
+        if writer is None or uploader is None:
+            raise FirmwareProtocolError("inverter session is not ready for firmware upload")
+        is_closing = getattr(writer, "is_closing", None)
+        if callable(is_closing) and is_closing():
+            raise FirmwareProtocolError("inverter connection is closing")
+        async with self._firmware_upload_lock:
+            return await uploader.upload(writer, image, protocol=protocol)
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16

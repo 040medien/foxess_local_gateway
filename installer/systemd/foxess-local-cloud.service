@@ -9,6 +9,8 @@ Type=simple
 User=foxess
 Group=foxess
 WorkingDirectory=/opt/foxess-local-cloud
+RuntimeDirectory=foxess-local-cloud
+RuntimeDirectoryMode=0750
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/foxess-local-cloud/venv/bin/python -m foxess_local_cloud.main --config /etc/foxess-local-cloud/config.json
 Restart=always
