@@ -323,6 +323,12 @@ Home Assistant slider and subscribes to its command topic after the inverter
 reports a parseable version of 1.80 or newer. Older or unknown versions have
 any retained `Active Power Limit` discovery entities removed automatically.
 
+The percentage is relative to the inverter's rated maximum AC output, not its
+current solar input. For example, a 20% limit on an M1-800-E is an approximate
+160 W output ceiling. The limit only becomes visible when the available solar
+power would otherwise exceed that ceiling. In a mesh installation, the
+percentage and resulting ceiling apply separately to each inverter.
+
 FoxESS makes firmware updates available through a FoxCloud 2.0 installer
 account. The exact versions offered depend on the account, region, and device:
 
@@ -495,6 +501,12 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-07-16
+
+- **Power-limit percentages are clarified.** `Active Power Limit` is relative
+  to each inverter's rated maximum AC output, not its current solar input; for
+  example, 20% on an M1-800-E is an approximate 160 W ceiling.
 
 ### 2026-07-15
 
