@@ -392,6 +392,12 @@ firmware; a tested follower completed its upgrade and rebooted despite the CLI
 timeout. A normal directly transferred upgrade must report every chunk, reach
 100%, reboot, and publish the new version before it is considered successful.
 
+After every member of a root/follower installation reports firmware 1.80 or
+newer, fully power-cycle the complete inverter pair before testing local
+control. A tested M1-800-E/M10200 pair acknowledged and read back
+`Active Power Limit` values after upgrading to 1.80, but did not apply the
+limits until this post-upgrade power cycle.
+
 ## Inverter Control
 
 Enabled by default. Exposes a writable `Active Power Limit` slider (0–100 %) in
@@ -442,6 +448,10 @@ What it does on the wire:
 
 Operational notes:
 
+- Firmware 1.80 or newer is required. Firmware 1.77 has been observed to
+  acknowledge writes that do not take effect while timing out diagnostic
+  readbacks. After upgrading a mesh installation, verify the reported version
+  on every inverter and fully power-cycle the pair before testing limits.
 - The inverter handles one Modbus transaction at a time. Bursty
   writes (driving the slider rapidly) can briefly time out cloud-side
   reads — this is normal and self-corrects within a few seconds.

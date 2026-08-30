@@ -315,8 +315,9 @@ sudo ./installer/install_pi_zero_gateway.sh --no-relay
 ## Firmware Version And Upgrades
 
 The local `Active Power Limit` control requires inverter firmware **1.80 or
-newer**. It is confirmed unavailable on 1.66 and available on 1.80; FoxCloud
-did not offer 1.77 for a direct boundary test. The current version appears in
+newer**. It is confirmed unavailable on 1.66; on 1.77, writes can be
+acknowledged without taking effect and diagnostic readback requests time out.
+It is confirmed available on 1.80. The current version appears in
 the Home Assistant device information
 and in the gateway's `product_info` log event. The gateway only publishes the
 Home Assistant slider and subscribes to its command topic after the inverter
@@ -340,6 +341,12 @@ account. The exact versions offered depend on the account, region, and device:
    then select **Version**.
 4. Select the offered firmware, choose **Upgrade Now**, and keep the inverter
    powered and online until the operation finishes.
+
+For a root/follower installation, upgrade every inverter and verify that each
+reports 1.80 or newer. Then fully power-cycle the complete pair before testing
+`Active Power Limit`. An M1-800-E/M10200 pair accepted and read back limits
+after upgrading to 1.80 but did not apply them until this post-upgrade power
+cycle.
 
 These steps follow the official [FoxCloud 2.0 App User
 Manual](https://www.fox-ess.com/Public/Uploads/uploadfile/files/20260212/ENFoxCloud2.0AppUserManual.pdf).
@@ -486,7 +493,9 @@ installer to do it via the FoxESS portal.
 
 `Active Power Limit` itself requires inverter firmware 1.80 or newer. If the
 slider's write is acknowledged but the output does not change, check the
-reported firmware version before investigating the Modbus exchange.
+reported firmware version first. After upgrading a root/follower pair, verify
+that both units report 1.80 or newer and fully power-cycle the pair before
+investigating the Modbus exchange.
 
 ### Can the gateway update telemetry faster than ~90 seconds?
 
@@ -501,6 +510,14 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-08-03
+
+- **Post-upgrade power cycling is documented.** A tested M1-800-E/M10200
+  root/follower pair stored `Active Power Limit` values on firmware 1.80 but
+  did not apply them until both inverters were fully power-cycled. The firmware
+  guidance now also records the observed 1.77 acknowledgement/readback
+  behaviour.
 
 ### 2026-07-16
 
