@@ -211,10 +211,13 @@ class LocalCloudProtocolTest(unittest.TestCase):
     def test_active_power_limit_firmware_version_gate(self) -> None:
         for firmware in ("1.80", "1.81", "1.84", "v1.80", "1.80.1", "2.0"):
             with self.subTest(firmware=firmware):
-                self.assertTrue(supports_active_power_limit(firmware))
+                self.assertTrue(supports_active_power_limit("M1-800-E", firmware))
         for firmware in ("", "unknown", "1.66", "1.79", "1.8", "M1V184"):
             with self.subTest(firmware=firmware):
-                self.assertFalse(supports_active_power_limit(firmware))
+                self.assertFalse(supports_active_power_limit("M1-800-E", firmware))
+        for model, firmware in (("", "1.80"), ("Q1-E", "1.22"), ("Q1-2000-E", "9.99")):
+            with self.subTest(model=model, firmware=firmware):
+                self.assertFalse(supports_active_power_limit(model, firmware))
 
     def test_config_loads_relay_and_mqtt(self) -> None:
         cfg = load_config(ROOT / "local-cloud.example.json")
@@ -2031,6 +2034,33 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(discovery), 1)
         self.assertEqual(json.loads(discovery[0])["name"], "Active Power Limit")
+
+    async def test_active_power_limit_not_exposed_for_unvalidated_q1_firmware(self) -> None:
+        from foxess_local_cloud.config import InverterControl
+
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(
+            AppConfig(
+                mqtt=MqttConfig(host="mqtt.local"),
+                inverter_control=InverterControl(enabled=True),
+            )
+        )
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+        session = Session(app, 1)
+        writer = FakeStreamWriter()
+
+        registration = extract_frames(bytearray(registration_frame()))[0]
+        await session.handle_frame(registration, writer, send_bootstrap=False)
+        product = extract_frames(bytearray(product_info_frame(model="Q1-E", firmware="1.22")))[0]
+        await session.handle_frame(product, writer, send_bootstrap=False)
+
+        topic = app.mqtt.active_power_limit_command_topic(TEST_SERIAL)
+        self.assertNotIn(topic, app.mqtt._command_handlers)
+        self.assertFalse(any(
+            published_topic.endswith("/active_power_limit/config") and payload
+            for published_topic, payload, _retain in client.published
+        ))
 
     async def test_active_power_limit_settles_when_product_info_follows_telemetry(self) -> None:
         """Mesh followers may send telemetry before product info. Learning a

@@ -119,13 +119,15 @@ def expected_disconnect_reason(exc: BaseException) -> str | None:
     return None
 
 
-def supports_active_power_limit(firmware: str) -> bool:
-    """Whether a reported FoxESS firmware version supports register 0xCA5A.
+def supports_active_power_limit(model: str, firmware: str) -> bool:
+    """Whether a reported inverter supports the validated 0xCA5A control path.
 
-    FoxESS currently reports versions such as ``1.80`` and ``1.84``. Accept a
-    leading ``v`` and a patch/suffix defensively, but fail closed when no
-    numeric major/minor pair is available.
+    The local control path is verified only on M1 firmware 1.80 and newer.
+    Q1 uses a separate firmware version sequence, so fail closed for Q1 until
+    its control behaviour is tested rather than applying the M1 threshold.
     """
+    if not model.strip().upper().startswith("M1"):
+        return False
     match = re.search(r"(?i)(?:^|[^0-9])v?(\d+)\.(\d+)(?:\.\d+)?", firmware.strip())
     if match is None:
         return False
@@ -516,7 +518,7 @@ class Session:
         if (
             self.local_control is None
             or not self.serial
-            or not supports_active_power_limit(self.firmware)
+            or not supports_active_power_limit(self.model, self.firmware)
         ):
             return
         publisher = self.app.mqtt
@@ -548,7 +550,7 @@ class Session:
         """
         if not self.serial or self.local_control is None:
             return
-        if supports_active_power_limit(self.firmware):
+        if supports_active_power_limit(self.model, self.firmware):
             self._maybe_wire_active_power_limit_mqtt()
             self._maybe_settle_inverter_control()
             return

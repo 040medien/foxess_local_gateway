@@ -13,8 +13,9 @@ The inverter connects to the Pi AP. TCP/14431 connections from AP clients are
 redirected to the local daemon, which decodes pushed telemetry and publishes
 MQTT state.
 
-A writable `Active Power Limit` slider for Home Assistant is enabled
-by default on inverter firmware 1.80 or newer — see *Inverter Control* below.
+A writable M1 `Active Power Limit` slider for Home Assistant is enabled by
+default on verified M1 firmware 1.80 or newer. Q1 control remains unavailable
+until its separate firmware track is validated — see *Inverter Control* below.
 
 ## Networking Model
 
@@ -419,22 +420,23 @@ firmware; a tested follower completed its upgrade and rebooted despite the CLI
 timeout. A normal directly transferred upgrade must report every chunk, reach
 100%, reboot, and publish the new version before it is considered successful.
 
-After every member of a root/follower installation reports firmware 1.80 or
-newer, fully power-cycle the complete inverter pair before testing local
+After every member of an M1 root/follower installation reports firmware 1.80
+or newer, fully power-cycle the complete inverter pair before testing local
 control. A tested M1-800-E/M10200 pair acknowledged and read back
 `Active Power Limit` values after upgrading to 1.80, but did not apply the
 limits until this post-upgrade power cycle.
 
 ## Inverter Control
 
-Enabled by default. Exposes a writable `Active Power Limit` slider (0–100 %) in
-Home Assistant only after the inverter reports a parseable firmware version of
-1.80 or newer. Older or unknown versions have any retained slider discovery
-removed and their MQTT command topic is not handled. No periodic polling — the
-daemon reads the current value once on the first telemetry frame so HA shows
-the live setpoint as soon as the inverter is producing, then writes whatever
-HA's slider sets and the response is stripped from the bytes forwarded to
-FoxCloud.
+Enabled by default for validated M1 firmware. Exposes a writable `Active Power
+Limit` slider (0–100 %) in Home Assistant only after an M1 reports a parseable
+firmware version of 1.80 or newer. Older or unknown M1 versions have any
+retained slider discovery removed and their MQTT command topic is not handled.
+Q1 uses a separate firmware-version sequence, so its control is deliberately
+unavailable until validated. No periodic polling — the daemon reads the
+current value once on the first telemetry frame so HA shows the live setpoint
+as soon as the inverter is producing, then writes whatever HA's slider sets
+and the response is stripped from the bytes forwarded to FoxCloud.
 
 To turn it off:
 
@@ -475,10 +477,11 @@ What it does on the wire:
 
 Operational notes:
 
-- Firmware 1.80 or newer is required. Firmware 1.77 has been observed to
-  acknowledge writes that do not take effect while timing out diagnostic
-  readbacks. After upgrading a mesh installation, verify the reported version
-  on every inverter and fully power-cycle the pair before testing limits.
+- M1 firmware 1.80 or newer is required. M1 firmware 1.77 has been observed
+  to acknowledge writes that do not take effect while timing out diagnostic
+  readbacks. After upgrading an M1 mesh installation, verify the reported
+  version on every inverter and fully power-cycle the pair before testing
+  limits. Q1 control remains unavailable until separately validated.
 - The inverter handles one Modbus transaction at a time. Bursty
   writes (driving the slider rapidly) can briefly time out cloud-side
   reads — this is normal and self-corrects within a few seconds.
