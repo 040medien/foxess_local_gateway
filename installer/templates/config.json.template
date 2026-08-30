@@ -22,6 +22,7 @@
     "topic_prefix": "foxess_m1",
     "retain": true,
     "expire_after_seconds": 300,
+    "telemetry_stale_after_seconds": 300,
     "keepalive_seconds": 180,
     "reconnect_max_delay_seconds": 15,
     "debug": false

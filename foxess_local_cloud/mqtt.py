@@ -128,6 +128,7 @@ class MqttPublisher:
         event = "mqtt_connected" if reason_is_success(reason_code) else "mqtt_connect_failed"
         self.emit(event, host=self.config.host, port=self.config.port, reason=str(reason_code))
         if event == "mqtt_connected" and self.client is not None:
+            self._publish_gateway_discovery()
             self._publish(f"{self.config.topic_prefix}/status", "online", retain=True)
             # Re-subscribe to all registered command topics after a (re)connect.
             for topic in self._command_handlers:
@@ -261,6 +262,34 @@ class MqttPublisher:
         self._publish(f"{self.config.topic_prefix}/{telemetry.serial}/availability", "online", retain=True)
         self._publish_scalar_topics(telemetry)
 
+    def publish_inverter_availability(self, serial: str, status: str) -> None:
+        """Set the explicit per-inverter telemetry-freshness state."""
+        if not self.enabled or self.client is None or not serial:
+            return
+        self._publish(f"{self.config.topic_prefix}/{serial}/availability", status, retain=True)
+
+    def _publish_gateway_discovery(self) -> None:
+        """Publish the gateway-wide connectivity entity independently of any
+        inverter. It remains useful when every inverter is offline."""
+        payload = {
+            "name": "Connected",
+            "unique_id": "foxess_local_gateway_connected",
+            "object_id": "foxess_local_gateway_connected",
+            "state_topic": f"{self.config.topic_prefix}/status",
+            "payload_on": "online",
+            "payload_off": "offline",
+            "device_class": "connectivity",
+            "entity_category": "diagnostic",
+            "device": {
+                "identifiers": ["foxess_local_gateway"],
+                "name": "FoxESS Local Gateway",
+                "manufacturer": "FoxESS Local Gateway",
+                "model": "Local MQTT gateway",
+            },
+        }
+        topic = f"{self.config.discovery_prefix}/binary_sensor/foxess_local_gateway/connected/config"
+        self._publish(topic, json.dumps(payload, separators=(",", ":")), retain=True)
+
     def _publish_discovery(self, telemetry: Telemetry) -> None:
         assert self.client is not None
         serial = telemetry.serial
@@ -274,6 +303,7 @@ class MqttPublisher:
         state_topic = f"{self.config.topic_prefix}/{serial}/state"
         availability = self._availability_block(serial)
         state = self._state_dict(telemetry)
+        self._publish_telemetry_connectivity_discovery(serial, device)
         for field_name in state:
             if field_name in {"serial", "model", "firmware", "module", "fault_active", "last_fault_code", "last_fault_message", "last_fault_timestamp", "mesh_role", "mesh_peer_serial"}:
                 continue
@@ -486,6 +516,34 @@ class MqttPublisher:
                 "payload_not_available": "offline",
             },
         ]
+
+    def _publish_telemetry_connectivity_discovery(self, serial: str, device: dict[str, Any]) -> None:
+        """Expose telemetry freshness as a direct HA automation target.
+
+        The gateway status is deliberately the entity's only availability
+        dependency: a crashed daemon is unavailable, while an otherwise healthy
+        gateway that has lost this inverter reports OFF.
+        """
+        payload = {
+            "name": "Telemetry Connected",
+            "unique_id": f"foxess_{serial}_telemetry_connected",
+            "object_id": f"foxess_{serial}_telemetry_connected",
+            "state_topic": f"{self.config.topic_prefix}/{serial}/availability",
+            "payload_on": "online",
+            "payload_off": "offline",
+            "device_class": "connectivity",
+            "entity_category": "diagnostic",
+            "availability": [
+                {
+                    "topic": f"{self.config.topic_prefix}/status",
+                    "payload_available": "online",
+                    "payload_not_available": "offline",
+                }
+            ],
+            "device": device,
+        }
+        topic = f"{self.config.discovery_prefix}/binary_sensor/foxess_{serial}/telemetry_connected/config"
+        self._publish(topic, json.dumps(payload, separators=(",", ":")), retain=True)
 
     def _state_dict(self, telemetry: Telemetry) -> dict[str, Any]:
         state = telemetry.as_dict()

@@ -18,6 +18,9 @@ class MqttConfig:
     topic_prefix: str = "foxess_m1"
     retain: bool = True
     expire_after_seconds: int | None = 300
+    # Mark an inverter's MQTT availability offline when no telemetry has been
+    # received for this long. 0 disables the explicit stale-data watchdog.
+    telemetry_stale_after_seconds: int = 300
     keepalive_seconds: int = 180
     reconnect_max_delay_seconds: int = 15
     # How often the daemon checks that paho's network loop is still alive and
@@ -143,6 +146,7 @@ def load_config(path: Path | None) -> AppConfig:
             topic_prefix=str(mqtt_raw.get("topic_prefix", "foxess_m1")),
             retain=bool(mqtt_raw.get("retain", True)),
             expire_after_seconds=optional_int(mqtt_raw.get("expire_after_seconds", 300)),
+            telemetry_stale_after_seconds=int(mqtt_raw.get("telemetry_stale_after_seconds", 300)),
             keepalive_seconds=int(mqtt_raw.get("keepalive_seconds", 180)),
             reconnect_max_delay_seconds=int(mqtt_raw.get("reconnect_max_delay_seconds", 15)),
             health_check_interval_seconds=int(mqtt_raw.get("health_check_interval_seconds", 30)),

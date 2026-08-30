@@ -296,6 +296,33 @@ sudo systemctl restart foxess-local-cloud
 On reinstall, omitted MQTT host/port/username/password values are preserved from
 the existing config. Use `--no-mqtt` to clear MQTT settings explicitly.
 
+### Connectivity monitoring
+
+MQTT discovery adds a **FoxESS Local Gateway / Connected** diagnostic entity
+and a **Telemetry Connected** entity for every inverter. The gateway entity is
+driven by the retained `foxess_m1/status` Last Will: `offline` means the daemon
+lost its broker connection, and `online` is published after reconnecting. An
+inverter's telemetry entity turns off when no telemetry has arrived for five
+minutes; if the daemon itself is offline, it is unavailable instead.
+
+For Home Assistant automations that rely on generation data, require both
+entities to be on and treat off or unavailable as "do not act". Change the
+per-inverter stale timeout in the daemon config if needed:
+
+```json
+{
+  "mqtt": {
+    "telemetry_stale_after_seconds": 300
+  }
+}
+```
+
+Set `telemetry_stale_after_seconds` to `0` to disable explicit stale-data
+transitions. It is independent of `expire_after_seconds`, which expires each
+individual sensor state. The daemon service is also systemd-supervised: it
+restarts after crashes and systemd restarts it if its asyncio event loop stops
+responding for 90 seconds.
+
 Before overwriting the daemon config, the installer saves:
 
 ```text

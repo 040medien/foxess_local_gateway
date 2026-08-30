@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import socket
 import ssl
@@ -70,6 +71,41 @@ _EXPECTED_TLS_DISCONNECT_ERRORS = (
 )
 
 
+def systemd_watchdog_interval_seconds(environ: dict[str, str] | None = None) -> float | None:
+    """Return a safe systemd watchdog heartbeat interval, if enabled.
+
+    systemd supplies ``WATCHDOG_USEC`` only when WatchdogSec is configured for
+    this service. Respect WATCHDOG_PID so a stale inherited environment cannot
+    accidentally notify for a different process.
+    """
+    env = os.environ if environ is None else environ
+    watchdog_pid = env.get("WATCHDOG_PID")
+    if watchdog_pid and watchdog_pid != str(os.getpid()):
+        return None
+    try:
+        timeout_seconds = int(env.get("WATCHDOG_USEC", "0")) / 1_000_000
+    except ValueError:
+        return None
+    if timeout_seconds <= 0:
+        return None
+    # Notify at least twice per systemd timeout, without needlessly waking the
+    # Pi more often than every 30 seconds for a long timeout.
+    return min(timeout_seconds / 2, 30.0)
+
+
+def notify_systemd(message: str, environ: dict[str, str] | None = None) -> bool:
+    """Send a notification datagram to systemd when NOTIFY_SOCKET is set."""
+    env = os.environ if environ is None else environ
+    path = env.get("NOTIFY_SOCKET")
+    if not path:
+        return False
+    address = "\0" + path[1:] if path.startswith("@") else path
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify_socket:
+        notify_socket.connect(address)
+        notify_socket.sendall(message.encode("ascii"))
+    return True
+
+
 def expected_disconnect_reason(exc: BaseException) -> str | None:
     message = str(exc).lower()
     if isinstance(exc, TimeoutError) and "ssl shutdown timed out" in message:
@@ -123,6 +159,8 @@ class FoxessLocalCloud:
         self.mqtt = MqttPublisher(config.mqtt, config.devices, emit=self.logger.emit)
         self.next_session_id = 1
         self.last_publish_by_serial: dict[str, float] = {}
+        self.last_telemetry_by_serial: dict[str, float] = {}
+        self.stale_telemetry_serials: set[str] = set()
         # ActivePowerLimit retry-on-reconnect state, keyed by serial. ``desired``
         # is the last setpoint Home Assistant asked for; ``applied`` is the last
         # value the inverter acknowledged (kept for observability). A serial is
@@ -200,14 +238,19 @@ class FoxessLocalCloud:
             control_server = await asyncio.start_unix_server(self.handle_firmware_control, path=control_path)
             control_path.chmod(0o600)
             self.logger.emit("firmware_control_listen", path=str(control_path))
-        watchdog = asyncio.create_task(self._mqtt_watchdog())
+        background_tasks = [
+            asyncio.create_task(self._mqtt_watchdog()),
+            asyncio.create_task(self._telemetry_watchdog()),
+            asyncio.create_task(self._systemd_watchdog()),
+        ]
         tasks = [asyncio.create_task(server.serve_forever())]
         if control_server is not None:
             tasks.append(asyncio.create_task(control_server.serve_forever()))
         try:
             await asyncio.gather(*tasks)
         finally:
-            watchdog.cancel()
+            for task in background_tasks:
+                task.cancel()
             for task in tasks:
                 task.cancel()
             server.close()
@@ -285,6 +328,52 @@ class FoxessLocalCloud:
             except Exception as exc:
                 self.logger.emit("mqtt_watchdog_error", error=str(exc))
 
+    async def _telemetry_watchdog(self) -> None:
+        """Make a stale inverter explicitly unavailable in Home Assistant.
+
+        ``expire_after`` protects individual state values, but this emits a
+        retained per-inverter state so HA has one clear diagnostic entity and
+        all discovered inverter entities share the same availability outcome.
+        """
+        timeout = self.config.mqtt.telemetry_stale_after_seconds
+        if timeout <= 0:
+            return
+        interval = min(30.0, max(1.0, timeout / 3))
+        while True:
+            await asyncio.sleep(interval)
+            self._mark_stale_telemetry(time.monotonic())
+
+    def _mark_stale_telemetry(self, now: float) -> None:
+        """Publish each newly stale inverter once. Split out for deterministic
+        testing; ``now`` must use the same monotonic clock as telemetry."""
+        timeout = self.config.mqtt.telemetry_stale_after_seconds
+        for serial, last_seen in tuple(self.last_telemetry_by_serial.items()):
+            age = now - last_seen
+            if age < timeout or serial in self.stale_telemetry_serials:
+                continue
+            self.stale_telemetry_serials.add(serial)
+            self.mqtt.publish_inverter_availability(serial, "offline")
+            self.logger.emit("telemetry_stale", serial=serial, age_seconds=round(age, 1))
+
+    async def _systemd_watchdog(self) -> None:
+        """Heartbeat only after the listener has started, so systemd restarts
+        the service if the asyncio event loop becomes stuck."""
+        interval = systemd_watchdog_interval_seconds()
+        if interval is None:
+            return
+        try:
+            notify_systemd("WATCHDOG=1")
+            self.logger.emit("systemd_watchdog_enabled", interval_seconds=interval)
+        except OSError as exc:
+            self.logger.emit("systemd_watchdog_error", error=str(exc))
+            return
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                notify_systemd("WATCHDOG=1")
+            except OSError as exc:
+                self.logger.emit("systemd_watchdog_error", error=str(exc))
+
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         session_id = self.next_session_id
         self.next_session_id += 1
@@ -324,6 +413,14 @@ class FoxessLocalCloud:
 
     def publish_telemetry(self, session_id: int, telemetry: Any, raw_nonzero_u16: dict[str, int] | None = None) -> None:
         serial = telemetry.serial
+        if serial:
+            now_monotonic = time.monotonic()
+            was_stale = serial in self.stale_telemetry_serials
+            self.last_telemetry_by_serial[serial] = now_monotonic
+            self.stale_telemetry_serials.discard(serial)
+            if was_stale:
+                self.mqtt.publish_inverter_availability(serial, "online")
+                self.logger.emit("telemetry_resumed", session=session_id, serial=serial)
         now = time.time()
         min_interval = self.config.publish_min_interval_seconds
         if serial and min_interval > 0 and now - self.last_publish_by_serial.get(serial, 0) < min_interval:

@@ -65,10 +65,10 @@ Options:
   --preview-dir DIR                 Dry-run output directory
   --skip-app-copy                   Dry-run only: render config without copying app tree
   --app-only                        Fast redeploy of the daemon code only: sync the app
-                                    tree to the install prefix, refresh the venv, and
-                                    restart the daemon. Skips apt, the AP/hostapd/nftables
-                                    setup, and config regeneration. Requires an existing
-                                    full install; ideal for iterating on feature branches.
+                                    tree and daemon unit, refresh the venv, and restart
+                                    the daemon. Skips apt, the AP/hostapd/nftables setup,
+                                    and config regeneration. Requires an existing full
+                                    install; ideal for iterating on feature branches.
   --non-interactive                 Do not prompt; require passwords via flags/env
   --ap-ssid SSID                    Inverter-only Wi-Fi SSID
   --ap-passphrase PASSPHRASE        WPA2 passphrase, 8+ chars; generated if omitted
@@ -549,6 +549,9 @@ if [[ "$APP_ONLY" = 1 ]]; then
   install -d -o foxess -g foxess -m 0750 "$STATE_DIR/firmware-captures"
   sync_app_tree
   refresh_venv_for_app_only
+  install -m 0644 "$ROOT_DIR/installer/systemd/foxess-local-cloud.service" \
+    /etc/systemd/system/foxess-local-cloud.service
+  systemctl daemon-reload
   systemctl restart foxess-local-cloud.service
   systemctl --no-pager --full status foxess-local-cloud.service || true
   exit 0

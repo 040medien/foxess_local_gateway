@@ -247,6 +247,35 @@ Then restart:
 sudo systemctl restart foxess-local-cloud
 ```
 
+### Connectivity And Stale Data
+
+Home Assistant also discovers a separate **FoxESS Local Gateway / Connected**
+diagnostic entity. It follows the retained `foxess_m1/status` MQTT topic: it
+turns off when the daemon disconnects unexpectedly and on again after it has
+reconnected to the broker.
+
+Each inverter has a **Telemetry Connected** diagnostic entity. It is on while
+recent telemetry is arriving and turns off after five minutes without a frame.
+This is distinct from a gateway crash: if the daemon itself is offline, the
+entity becomes unavailable instead. The normal inverter sensors use the same
+per-inverter availability state, so they do not silently retain a stale value.
+
+For an automation that depends on generation data, require both diagnostic
+entities to be on; treat off or unavailable as "do not act". The five-minute
+freshness timeout is configurable in `/etc/foxess-local-cloud/config.json`:
+
+```json
+{
+  "mqtt": {
+    "telemetry_stale_after_seconds": 300
+  }
+}
+```
+
+Set it to `0` to disable the explicit per-inverter stale-data state. It is
+separate from `expire_after_seconds`, which expires individual MQTT sensor
+values.
+
 ## Status And Logs
 
 ```bash
@@ -267,7 +296,13 @@ module_info
 product_info
 telemetry
 mqtt_connected
+telemetry_stale
+telemetry_resumed
 ```
+
+The installed daemon is supervised by systemd. It restarts after a crash and
+also sends a 90-second systemd watchdog heartbeat once its TLS listener is
+ready; a blocked asyncio event loop is therefore restarted automatically.
 
 ## Configuration
 
@@ -510,6 +545,14 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-08-25
+
+- **Gateway and stale-data monitoring.** Home Assistant now gets a separate
+  gateway-connectivity diagnostic entity plus a `Telemetry Connected` entity
+  for every inverter. Missing telemetry explicitly marks that inverter
+  unavailable after five minutes, while systemd restarts a crashed or hung
+  daemon automatically.
 
 ### 2026-08-03
 

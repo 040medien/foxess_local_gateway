@@ -15,6 +15,10 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/foxess-local-cloud/venv/bin/python -m foxess_local_cloud.main --config /etc/foxess-local-cloud/config.json
 Restart=always
 RestartSec=5
+# Restarts the daemon if its asyncio loop stops making progress without
+# crashing (the daemon sends WATCHDOG=1 after its TLS listener is ready).
+WatchdogSec=90
+NotifyAccess=main
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

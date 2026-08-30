@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -19,7 +20,15 @@ from foxess_local_cloud.protocol import (
     product_info,
     registration_serial,
 )
-from foxess_local_cloud.server import FOXESS_UPSTREAM_CERT_SHA256, FoxessLocalCloud, Session, check_upstream_cert, supports_active_power_limit
+from foxess_local_cloud.server import (
+    FOXESS_UPSTREAM_CERT_SHA256,
+    FoxessLocalCloud,
+    Session,
+    check_upstream_cert,
+    notify_systemd,
+    supports_active_power_limit,
+    systemd_watchdog_interval_seconds,
+)
 from foxess_local_cloud.telemetry import FAULT_CODE_NAMES, Telemetry, decode_telemetry, fault_code_for, fault_code_message_for, is_known_fault_code, nonzero_u16_words, u32_wordswapped
 
 
@@ -214,7 +223,26 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(cfg.devices, {})
         self.assertTrue(cfg.mqtt.retain)
         self.assertEqual(cfg.mqtt.expire_after_seconds, 300)
+        self.assertEqual(cfg.mqtt.telemetry_stale_after_seconds, 300)
         self.assertFalse(cfg.mqtt.debug)
+
+    def test_systemd_watchdog_interval_respects_environment(self) -> None:
+        self.assertEqual(
+            systemd_watchdog_interval_seconds({"WATCHDOG_USEC": "90000000", "WATCHDOG_PID": str(os.getpid())}),
+            30.0,
+        )
+        self.assertEqual(systemd_watchdog_interval_seconds({"WATCHDOG_USEC": "10000000"}), 5.0)
+        self.assertIsNone(systemd_watchdog_interval_seconds({"WATCHDOG_USEC": "invalid"}))
+        self.assertIsNone(systemd_watchdog_interval_seconds({"WATCHDOG_USEC": "1000000", "WATCHDOG_PID": "999999"}))
+
+    def test_notify_systemd_sends_datagram(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = str(Path(tmpdir) / "notify.sock")
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as listener:
+                listener.bind(path)
+                self.assertTrue(notify_systemd("WATCHDOG=1", {"NOTIFY_SOCKET": path}))
+                self.assertEqual(listener.recv(64), b"WATCHDOG=1")
+        self.assertFalse(notify_systemd("WATCHDOG=1", {}))
 
     def test_bootstrap_responder_matches_expected_shape(self) -> None:
         raw_frames = [
@@ -515,6 +543,31 @@ class LocalCloudProtocolTest(unittest.TestCase):
 
 
 class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_telemetry_staleness_marks_inverter_offline_and_recovers(self) -> None:
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(
+            AppConfig(mqtt=MqttConfig(host="mqtt.local", telemetry_stale_after_seconds=300))
+        )
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        app.last_telemetry_by_serial[TEST_SERIAL] = 100.0
+
+        app._mark_stale_telemetry(400.0)
+        app._mark_stale_telemetry(500.0)
+
+        availability_topic = f"foxess_m1/{TEST_SERIAL}/availability"
+        offline = [(topic, payload) for topic, payload, _retain in client.published if topic == availability_topic]
+        self.assertEqual(offline, [(availability_topic, "offline")])
+        self.assertEqual([event for event, _fields in events], ["telemetry_stale"])
+
+        app.publish_telemetry(1, sample_telemetry())
+
+        availability = [(topic, payload) for topic, payload, _retain in client.published if topic == availability_topic]
+        self.assertEqual(availability[-2:], [(availability_topic, "online"), (availability_topic, "online")])
+        self.assertIn("telemetry_resumed", [event for event, _fields in events])
+
     async def test_expected_tls_close_failure_is_logged_as_disconnect(self) -> None:
         app = FoxessLocalCloud(AppConfig())
         events: list[tuple[str, dict[str, object]]] = []
@@ -2127,10 +2180,16 @@ class MqttPublisherTest(unittest.TestCase):
         self.assertTrue(any(payload["unique_id"].endswith("_pv4_power_w") for payload in discovery_payloads))
         self.assertTrue(any(payload["object_id"].endswith("_pv4_power_w") for payload in discovery_payloads))
         for payload in discovery_payloads:
+            if payload["unique_id"].endswith("_telemetry_connected"):
+                continue
             self.assertEqual(payload["availability_mode"], "all")
             topics = [entry["topic"] for entry in payload["availability"]]
             self.assertEqual(topics, ["foxess_m1/status", "foxess_m1/Q1SERIAL000001/availability"])
         self.assertTrue(any(payload.get("expire_after") == 300 for payload in discovery_payloads if payload["unique_id"].endswith("_pv4_power_w")))
+
+        health_payload = next(payload for payload in discovery_payloads if payload["unique_id"].endswith("_telemetry_connected"))
+        self.assertEqual(health_payload["state_topic"], "foxess_m1/Q1SERIAL000001/availability")
+        self.assertEqual(health_payload["availability"][0]["topic"], "foxess_m1/status")
 
     def test_mqtt_republishes_discovery_when_model_is_later_detected(self) -> None:
         client = FakeMqttClient()
@@ -2279,6 +2338,22 @@ class MqttPublisherTest(unittest.TestCase):
         publisher._on_connect(None, None, None, "Not authorized")
 
         self.assertEqual([event for event, _fields in events], ["mqtt_connected", "mqtt_connect_failed"])
+
+    def test_mqtt_connect_publishes_gateway_connectivity_discovery(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(MqttConfig(host="mqtt.local"), {}, client_factory=lambda: client)
+        publisher.connect()
+
+        publisher._on_connect(client, None, None, "Success")
+
+        topics = {topic: payload for topic, payload, _retain in client.published}
+        config_topic = "homeassistant/binary_sensor/foxess_local_gateway/connected/config"
+        payload = json.loads(topics[config_topic])
+        self.assertEqual(payload["state_topic"], "foxess_m1/status")
+        self.assertEqual(payload["payload_on"], "online")
+        self.assertEqual(payload["payload_off"], "offline")
+        self.assertEqual(payload["device_class"], "connectivity")
+        self.assertEqual(topics["foxess_m1/status"], "online")
 
     def test_generation_metadata_uses_total_increasing_for_lifetime_counter(self) -> None:
         self.assertEqual(metadata_for("generation_kwh"), ("kWh", "energy", "total_increasing"))
@@ -2513,6 +2588,8 @@ class InstallerTest(unittest.TestCase):
 
             local_cloud_unit = (Path(tmpdir) / "etc/systemd/system/foxess-local-cloud.service").read_text(encoding="utf-8")
             self.assertIn("After=network-online.target foxess-pi-ap.service", local_cloud_unit)
+            self.assertIn("WatchdogSec=90", local_cloud_unit)
+            self.assertIn("NotifyAccess=main", local_cloud_unit)
             self.assertNotIn("foxess-hostapd.service", local_cloud_unit)
 
             hostapd_unit = (Path(tmpdir) / "etc/systemd/system/foxess-hostapd.service").read_text(encoding="utf-8")
