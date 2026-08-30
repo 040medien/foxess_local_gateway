@@ -27,7 +27,7 @@ def supports_ac_fault_history(model: str) -> bool:
     creates false Home Assistant fault reports.  Keep the raw words available
     in the telemetry log while the Q1 layout is investigated.
     """
-    return not model.strip().upper().startswith("Q1")
+    return model.strip().upper().startswith("M1")
 
 
 # Map of FoxESS 4-digit fault code → human-readable name.

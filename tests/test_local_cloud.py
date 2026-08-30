@@ -443,6 +443,7 @@ class LocalCloudProtocolTest(unittest.TestCase):
         telemetry = decode_telemetry(bytes(payload), "Q1SERIAL000001", "Q1-E", firmware="1.22")
 
         self.assertFalse(telemetry.fault_active)
+        self.assertFalse(supports_ac_fault_history(""))
         self.assertFalse(supports_ac_fault_history("Q1-E"))
         self.assertTrue(supports_ac_fault_history("M1-800-E"))
 
@@ -776,6 +777,23 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         for offset, value in ((98, 980), (100, 948), (102, 974), (104, 942)):
             payload[offset : offset + 2] = value.to_bytes(2, "big")
 
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        self.assertFalse(any(event.startswith("fault_") for event, _fields in events))
+        self.assertEqual(session.last_fault_code, "")
+
+    async def test_unknown_model_does_not_record_q1_fault_before_product_info(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+        payload = bytearray(telemetry_payload())
+        for offset, value in ((98, 980), (100, 948), (102, 974), (104, 942)):
+            payload[offset : offset + 2] = value.to_bytes(2, "big")
+
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+        session.model = "Q1-E"
         await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
 
         self.assertFalse(any(event.startswith("fault_") for event, _fields in events))
