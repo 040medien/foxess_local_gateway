@@ -19,10 +19,21 @@ AC_FAULT_BITS = 14
 AC_FAULT_MASK = (1 << AC_FAULT_BITS) - 1
 
 
+def supports_ac_fault_history(model: str) -> bool:
+    """Whether the documented AC-fault FIFO layout is known for this model.
+
+    The layout is confirmed on M1 hardware.  Q1 firmware 1.22 uses offsets
+    98–106 for changing non-fault values, so interpreting them as a bitmask
+    creates false Home Assistant fault reports.  Keep the raw words available
+    in the telemetry log while the Q1 layout is investigated.
+    """
+    return not model.strip().upper().startswith("Q1")
+
+
 # Map of FoxESS 4-digit fault code → human-readable name.
 # Source: FoxESS Q-Series microinverter user manual V1.0.0, Section 6.1
-# Troubleshooting List. The Q and M families share a fault numbering
-# scheme; codes apply to both.
+# Troubleshooting List. The names share a Q/M-family numbering scheme, but the
+# telemetry words that select them are confirmed only for M1.
 FAULT_CODE_NAMES: dict[str, str] = {
     # PV1 faults
     "4029": "PV1 Internal Short-Circuit",
@@ -199,7 +210,9 @@ def decode_telemetry(
     r_power_w = s16(payload, 6)
     export_power_w = -s16(payload, 2)
     operating_state_code = u16(payload, 154)
-    fault_active = any(u16(payload, off) for off in (98, 100, 102, 104, 106))
+    fault_active = supports_ac_fault_history(model) and any(
+        u16(payload, off) for off in (98, 100, 102, 104, 106)
+    )
     return Telemetry(
         serial=serial,
         model=model,
