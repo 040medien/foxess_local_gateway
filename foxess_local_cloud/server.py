@@ -44,7 +44,7 @@ from .protocol import (
     product_info,
     registration_serial,
 )
-from .telemetry import decode_telemetry, fault_code_for, is_known_fault_code, nonzero_u16_words
+from .telemetry import decode_telemetry, fault_code_for, is_known_fault_code, nonzero_u16_words, supports_ac_fault_history
 
 
 FOXESS_CIPHERS = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384"
@@ -1151,6 +1151,9 @@ class Session:
 
     def _update_fault_state(self, payload: bytes) -> None:
         from .telemetry import u16
+        if not supports_ac_fault_history(self.model):
+            self._previous_fault_active = False
+            return
         offset_98 = u16(payload, 98)
         offsets = (u16(payload, 100), u16(payload, 102), u16(payload, 104), u16(payload, 106))
         fault_active = any(offsets) or bool(offset_98)

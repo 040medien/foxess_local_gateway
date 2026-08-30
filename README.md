@@ -79,8 +79,8 @@ Tested:
   - AC power, voltage, current, and frequency.
   - Inverter temperature.
   - Lifetime generation and lifetime grid export.
-  - Operating state (running/idle/fault) and fault state, with the
-    last fault's code, message, and timestamp.
+  - Operating state (running/idle/fault). M1 models also have a fault state
+    with the last fault's code, message, and timestamp.
   - Firmware and hardware versions decoded from the module-info frame.
   - Mesh role (root or follower) and — for followers — the root
     inverter's serial, derived from the periodic role-declaration
@@ -423,21 +423,23 @@ accumulate more lifetime energy or hit error states.
 decoded and published as a Home Assistant sensor: PV power, voltage,
 and current per string; AC power, voltage, current, and frequency;
 inverter temperature; operating state; lifetime generation and
-lifetime grid export; current fault state with the last fault's
-code, human-readable message, and timestamp; firmware and hardware
-versions; mesh role for multi-inverter setups. Fault messages come
-from an embedded copy of the FoxESS Q/M-series service manual table,
-so no internet lookup is needed.
+lifetime grid export; firmware and hardware versions; mesh role for
+multi-inverter setups. M1 models also expose current fault state with the last
+fault's code, human-readable message, and timestamp. Those messages come from
+an embedded copy of the FoxESS M/Q-series service manual table, so no internet
+lookup is needed.
 
 A handful of bytes in the 238-byte push frame still don't have
 confirmed semantics and are logged as `raw_u16_*` for future
 investigation, but none of them carry data a Home Assistant user
 needs day to day.
 
-Q1 four-string PV (PV3/PV4) decoding is implemented model-aware but
-has not yet been validated on actual Q1 hardware. The same applies to
-the out-of-box commissioning flow for an inverter that has never been
-paired with the FoxESS app.
+Q1 four-string PV (PV3/PV4) decoding and the out-of-box Bluetooth
+commissioning flow are validated on Q1-2000-E hardware. Q1 firmware 1.22 uses
+the telemetry words that carry M1 AC-fault history for changing non-fault
+values, so the gateway deliberately does not expose fault entities for Q1
+until that model's fault layout is confirmed. The raw words remain available
+in the event log for investigation.
 
 ### Will I lose access to the FoxESS app?
 
@@ -545,6 +547,14 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-08-30
+
+- **Q1 false fault reports are suppressed.** Q1 firmware 1.22 sends changing
+  non-fault values in the telemetry words used for M1 AC-fault history. The
+  gateway now keeps those raw diagnostic values in the event log but removes
+  the misleading Q1 fault entities from Home Assistant until the Q1 fault
+  layout is confirmed.
 
 ### 2026-08-25
 

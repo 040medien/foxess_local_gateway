@@ -29,7 +29,7 @@ from foxess_local_cloud.server import (
     supports_active_power_limit,
     systemd_watchdog_interval_seconds,
 )
-from foxess_local_cloud.telemetry import FAULT_CODE_NAMES, Telemetry, decode_telemetry, fault_code_for, fault_code_message_for, is_known_fault_code, nonzero_u16_words, u32_wordswapped
+from foxess_local_cloud.telemetry import FAULT_CODE_NAMES, Telemetry, decode_telemetry, fault_code_for, fault_code_message_for, is_known_fault_code, nonzero_u16_words, supports_ac_fault_history, u32_wordswapped
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -435,6 +435,18 @@ class LocalCloudProtocolTest(unittest.TestCase):
         with_fault = decode_telemetry(bytes(payload), TEST_SERIAL, "M1-800-E")
         self.assertTrue(with_fault.fault_active)
 
+    def test_q1_does_not_treat_changing_words_as_ac_faults(self) -> None:
+        payload = bytearray(telemetry_payload())
+        for offset, value in ((98, 980), (100, 948), (102, 974), (104, 942)):
+            payload[offset : offset + 2] = value.to_bytes(2, "big")
+
+        telemetry = decode_telemetry(bytes(payload), "Q1SERIAL000001", "Q1-E", firmware="1.22")
+
+        self.assertFalse(telemetry.fault_active)
+        self.assertFalse(supports_ac_fault_history(""))
+        self.assertFalse(supports_ac_fault_history("Q1-E"))
+        self.assertTrue(supports_ac_fault_history("M1-800-E"))
+
     def test_supports_four_pv_falls_back_to_offset_156(self) -> None:
         payload = bytearray(telemetry_payload())
         # Offset 156 = 4 should enable PV3/PV4 even without "Q1" in the model string
@@ -663,6 +675,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
         session = Session(app, 1)
         session.serial = TEST_SERIAL
+        session.model = "M1-800-E"
 
         # Frame 1: clean telemetry, no fault → no fault_observed event
         clean = bytearray(telemetry_payload())
@@ -694,6 +707,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
         session = Session(app, 1)
         session.serial = TEST_SERIAL
+        session.model = "M1-800-E"
 
         under_voltage = bytearray(telemetry_payload())
         under_voltage[100:102] = (4).to_bytes(2, "big")
@@ -717,6 +731,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
         session = Session(app, 1)
         session.serial = TEST_SERIAL
+        session.model = "M1-800-E"
 
         marker_fault = bytearray(telemetry_payload())
         marker_fault[98:100] = (1).to_bytes(2, "big")
@@ -736,6 +751,7 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
         session = Session(app, 1)
         session.serial = TEST_SERIAL
+        session.model = "M1-800-E"
 
         ac_fault = bytearray(telemetry_payload())
         ac_fault[100:102] = (4).to_bytes(2, "big")
@@ -749,6 +765,39 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed, ["4158", "raw:offset98=0001"])
         self.assertEqual(cleared, ["4158", "raw:offset98=0001"])
         self.assertEqual(session.last_fault_code, "raw:offset98=0001")
+
+    async def test_q1_fault_words_do_not_emit_fault_events(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+        session.model = "Q1-E"
+        payload = bytearray(telemetry_payload())
+        for offset, value in ((98, 980), (100, 948), (102, 974), (104, 942)):
+            payload[offset : offset + 2] = value.to_bytes(2, "big")
+
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        self.assertFalse(any(event.startswith("fault_") for event, _fields in events))
+        self.assertEqual(session.last_fault_code, "")
+
+    async def test_unknown_model_does_not_record_q1_fault_before_product_info(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        session.serial = TEST_SERIAL
+        payload = bytearray(telemetry_payload())
+        for offset, value in ((98, 980), (100, 948), (102, 974), (104, 942)):
+            payload[offset : offset + 2] = value.to_bytes(2, "big")
+
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+        session.model = "Q1-E"
+        await session.handle_frame(extract_frames(bytearray(make_frame(b"\x7e\x7e", b"\x02\x00\x00\x00", 0x00, bytes(payload), b"\xe7\xe7")))[0], FakeStreamWriter())  # type: ignore[arg-type]
+
+        self.assertFalse(any(event.startswith("fault_") for event, _fields in events))
+        self.assertEqual(session.last_fault_code, "")
 
     async def test_relay_falls_back_to_local_when_upstream_connect_fails(self) -> None:
         import asyncio as _asyncio
@@ -2190,6 +2239,18 @@ class MqttPublisherTest(unittest.TestCase):
         health_payload = next(payload for payload in discovery_payloads if payload["unique_id"].endswith("_telemetry_connected"))
         self.assertEqual(health_payload["state_topic"], "foxess_m1/Q1SERIAL000001/availability")
         self.assertEqual(health_payload["availability"][0]["topic"], "foxess_m1/status")
+        unique_ids = {payload["unique_id"] for payload in discovery_payloads}
+        self.assertFalse(any(unique_id.endswith(("_fault", "_last_fault_code", "_last_fault_message", "_last_fault_timestamp")) for unique_id in unique_ids))
+        cleared_topics = {
+            topic for topic, payload, retain in client.published
+            if topic.endswith("/config") and payload == "" and retain
+        }
+        self.assertTrue({
+            "homeassistant/binary_sensor/foxess_Q1SERIAL000001/fault/config",
+            "homeassistant/sensor/foxess_Q1SERIAL000001/last_fault_code/config",
+            "homeassistant/sensor/foxess_Q1SERIAL000001/last_fault_message/config",
+            "homeassistant/sensor/foxess_Q1SERIAL000001/last_fault_timestamp/config",
+        }.issubset(cleared_topics))
 
     def test_mqtt_republishes_discovery_when_model_is_later_detected(self) -> None:
         client = FakeMqttClient()

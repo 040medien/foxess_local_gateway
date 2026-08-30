@@ -6,7 +6,7 @@ import json
 from typing import Any, Callable
 
 from .config import MqttConfig
-from .telemetry import Telemetry
+from .telemetry import Telemetry, supports_ac_fault_history
 
 
 DEBUG_SCALAR_TOPICS = ("0/sequence", "0/status_code")
@@ -331,8 +331,11 @@ class MqttPublisher:
                 payload["state_class"] = state_class
             self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
         self._publish_running_discovery(telemetry, device, state_topic)
-        self._publish_fault_discovery(telemetry, device, state_topic)
-        self._publish_last_fault_discovery(telemetry, device, state_topic)
+        if supports_ac_fault_history(model):
+            self._publish_fault_discovery(telemetry, device, state_topic)
+            self._publish_last_fault_discovery(telemetry, device, state_topic)
+        else:
+            self._clear_fault_discovery(serial)
         self._publish_mesh_discovery(telemetry, device, state_topic)
         self._clear_legacy_discovery(telemetry)
         if not self.config.debug:
@@ -419,6 +422,17 @@ class MqttPublisher:
             **common,
         }
         self._publish(ts_config_topic, json.dumps(ts_payload, separators=(",", ":")), retain=True)
+
+    def _clear_fault_discovery(self, serial: str) -> None:
+        """Remove M1-only fault entities retained from a previous version."""
+        topics = (
+            f"{self.config.discovery_prefix}/binary_sensor/foxess_{serial}/fault/config",
+            f"{self.config.discovery_prefix}/sensor/foxess_{serial}/last_fault_code/config",
+            f"{self.config.discovery_prefix}/sensor/foxess_{serial}/last_fault_message/config",
+            f"{self.config.discovery_prefix}/sensor/foxess_{serial}/last_fault_timestamp/config",
+        )
+        for topic in topics:
+            self._publish(topic, "", retain=True)
 
     def publish_active_power_limit_discovery(self, serial: str) -> None:
         """Announce the writable ActivePowerLimit slider to Home Assistant.
