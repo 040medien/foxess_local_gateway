@@ -12,9 +12,10 @@ the FoxESS app and cloud are not needed at any point.
 
 ## Why Use This
 
-- Writable `Active Power Limit` slider in Home Assistant for curtailment during
-  negative electricity prices or demand-charge avoidance (German
-  Nulleinspeisung); requires inverter firmware 1.80 or newer.
+- Writable M1 `Active Power Limit` slider in Home Assistant for curtailment
+  during negative electricity prices or demand-charge avoidance (German
+  Nulleinspeisung); requires verified M1 firmware 1.80 or newer. Q1 control is
+  intentionally unavailable until its separate firmware track is validated.
 - No data leaves your network, including during initial setup — the Pi can
   provision the inverter directly over Bluetooth, so the FoxCloud mobile
   app is optional.
@@ -90,10 +91,9 @@ Tested:
   community user.
 - MQTT retain and Home Assistant MQTT discovery.
 - Optional cloud relay mode while still decoding local telemetry.
-- Local control: writable `Active Power Limit` HA entity and Modbus
-  access (see *Inverter Control* in the runbook). `Active Power Limit`
-  requires inverter firmware 1.80 or newer. Unit-tested end-to-end; live
-  verification on an M1-800-E in progress.
+- Local control: writable M1 `Active Power Limit` HA entity and Modbus access
+  (see *Inverter Control* in the runbook). It requires verified M1 firmware
+  1.80 or newer. Q1 control remains unavailable pending validation.
 
 Not yet tested (please let me know if you were able to test it):
 
@@ -349,15 +349,20 @@ sudo ./installer/install_pi_zero_gateway.sh --no-relay
 
 ## Firmware Version And Upgrades
 
-The local `Active Power Limit` control requires inverter firmware **1.80 or
-newer**. It is confirmed unavailable on 1.66; on 1.77, writes can be
+The local `Active Power Limit` control is verified for **M1 firmware 1.80 or
+newer**. It is confirmed unavailable on M1 1.66; on M1 1.77, writes can be
 acknowledged without taking effect and diagnostic readback requests time out.
-It is confirmed available on 1.80. The current version appears in
+It is confirmed available on M1 1.80. The current version appears in
 the Home Assistant device information
 and in the gateway's `product_info` log event. The gateway only publishes the
-Home Assistant slider and subscribes to its command topic after the inverter
-reports a parseable version of 1.80 or newer. Older or unknown versions have
-any retained `Active Power Limit` discovery entities removed automatically.
+Home Assistant slider and subscribes to its command topic after an M1 reports
+a parseable version of 1.80 or newer. Older or unknown M1 versions have any
+retained `Active Power Limit` discovery entities removed automatically.
+
+Q1 uses a different firmware-version sequence. Its `Active Power Limit`
+support has not been validated, so the gateway deliberately keeps the slider
+and its command topic unavailable for every Q1 firmware version. Do not use
+the M1 1.80 threshold to judge whether a Q1 update is current.
 
 The percentage is relative to the inverter's rated maximum AC output, not its
 current solar input. For example, a 20% limit on an M1-800-E is an approximate
@@ -377,11 +382,11 @@ account. The exact versions offered depend on the account, region, and device:
 4. Select the offered firmware, choose **Upgrade Now**, and keep the inverter
    powered and online until the operation finishes.
 
-For a root/follower installation, upgrade every inverter and verify that each
-reports 1.80 or newer. Then fully power-cycle the complete pair before testing
-`Active Power Limit`. An M1-800-E/M10200 pair accepted and read back limits
-after upgrading to 1.80 but did not apply them until this post-upgrade power
-cycle.
+For an M1 root/follower installation, upgrade every inverter and verify that
+each reports 1.80 or newer. Then fully power-cycle the complete pair before
+testing `Active Power Limit`. An M1-800-E/M10200 pair accepted and read back
+limits after upgrading to 1.80 but did not apply them until this post-upgrade
+power cycle.
 
 These steps follow the official [FoxCloud 2.0 App User
 Manual](https://www.fox-ess.com/Public/Uploads/uploadfile/files/20260212/ENFoxCloud2.0AppUserManual.pdf).
@@ -528,11 +533,12 @@ should only be touched by a certified installer in coordination
 with your grid operator. If you need one changed, ask your
 installer to do it via the FoxESS portal.
 
-`Active Power Limit` itself requires inverter firmware 1.80 or newer. If the
+M1 `Active Power Limit` requires verified M1 firmware 1.80 or newer. If the
 slider's write is acknowledged but the output does not change, check the
-reported firmware version first. After upgrading a root/follower pair, verify
-that both units report 1.80 or newer and fully power-cycle the pair before
-investigating the Modbus exchange.
+reported firmware version first. After upgrading an M1 root/follower pair,
+verify that both units report 1.80 or newer and fully power-cycle the pair
+before investigating the Modbus exchange. Q1 local control remains disabled
+until its distinct firmware track has been validated.
 
 ### Can the gateway update telemetry faster than ~90 seconds?
 
@@ -550,6 +556,10 @@ history including refactors and internal scaffolding, see the git log.
 
 ### 2026-08-30
 
+- **Power-limit firmware support is now model-specific.** The M1 1.80
+  requirement is verified only for M1 firmware. Q1 uses separate version
+  numbers, so its `Active Power Limit` control remains safely unavailable
+  until tested rather than applying an M1 version threshold.
 - **Q1 false fault reports are suppressed.** Q1 firmware 1.22 sends changing
   non-fault values in the telemetry words used for M1 AC-fault history. The
   gateway now keeps those raw diagnostic values in the event log but removes
