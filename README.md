@@ -252,7 +252,10 @@ sudo systemctl restart foxess-local-cloud
 Home Assistant also discovers a separate **FoxESS Local Gateway / Connected**
 diagnostic entity. It follows the retained `foxess_m1/status` MQTT topic: it
 turns off when the daemon disconnects unexpectedly and on again after it has
-reconnected to the broker.
+reconnected to the broker. The gateway uses a stable MQTT client ID so a
+restarted daemon replaces its old broker connection, and refreshes its
+retained online status while connected. This prevents a delayed Last Will
+from an older connection leaving Home Assistant entities unavailable.
 
 Each inverter has a **Telemetry Connected** diagnostic entity. It is on while
 recent telemetry is arriving and turns off after five minutes without a frame.
@@ -553,6 +556,14 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-09-29
+
+- **Gateway MQTT status now recovers from stale disconnects.** A restart
+  replaces the previous broker connection, and the gateway refreshes its
+  retained online status while connected. This prevents an old connection's
+  delayed offline message from leaving Home Assistant sensors unavailable
+  despite fresh telemetry.
 
 ### 2026-08-30
 

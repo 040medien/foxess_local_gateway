@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from foxess_local_cloud.config import AppConfig, MqttConfig, RelayConfig, load_config
-from foxess_local_cloud.mqtt import MqttPublisher, metadata_for
+from foxess_local_cloud.mqtt import MqttPublisher, gateway_client_id, metadata_for
 from foxess_local_cloud.protocol import (
     BootstrapResponder,
     extract_frames,
@@ -2165,6 +2165,13 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MqttPublisherTest(unittest.TestCase):
+    def test_gateway_client_id_is_stable_and_scoped_to_gateway_and_topic(self) -> None:
+        client_id = gateway_client_id("foxess_m1", "gateway-one")
+        self.assertEqual(client_id, gateway_client_id("foxess_m1", "gateway-one"))
+        self.assertNotEqual(client_id, gateway_client_id("foxess_m1", "gateway-two"))
+        self.assertNotEqual(client_id, gateway_client_id("other", "gateway-one"))
+        self.assertLessEqual(len(client_id), 23)
+
     def test_mqtt_connect_uses_async_reconnect_loop(self) -> None:
         events: list[tuple[str, dict[str, object]]] = []
         client = FakeMqttClient()
@@ -2479,6 +2486,37 @@ class MqttPublisherTest(unittest.TestCase):
 
         self.assertEqual(client.calls.count(("loop_start", (), {})), connect_calls_before)
         self.assertFalse(any(event == "mqtt_loop_restart" for event, _ in events))
+
+    def test_ensure_connected_refreshes_online_only_while_broker_connected(self) -> None:
+        client = FakeMqttClient()
+        publisher = MqttPublisher(MqttConfig(host="mqtt.local"), {}, client_factory=lambda: client)
+        publisher.connect()
+        publisher.ensure_connected()
+        self.assertEqual(client.published, [])
+
+        publisher._on_connect(client, None, None, "Success")
+        client.published.clear()
+        publisher.ensure_connected()
+        self.assertEqual(client.published, [("foxess_m1/status", "online", True)])
+
+        publisher._on_disconnect(client, None, None, "Connection lost")
+        client.published.clear()
+        publisher.ensure_connected()
+        self.assertEqual(client.published, [])
+
+    def test_stale_client_callbacks_do_not_change_new_connection_state(self) -> None:
+        clients = [FakeMqttClient(), FakeMqttClient()]
+        publisher = MqttPublisher(MqttConfig(host="mqtt.local"), {}, client_factory=iter(clients).__next__)
+        publisher.connect()
+        clients[0].simulate_loop_death()
+        publisher.ensure_connected()
+        publisher._on_connect(clients[1], None, None, "Success")
+        publisher._on_disconnect(clients[0], None, None, "Connection lost")
+        clients[1].published.clear()
+
+        publisher.ensure_connected()
+
+        self.assertEqual(clients[1].published, [("foxess_m1/status", "online", True)])
 
     def test_ensure_connected_rebuilds_dead_loop(self) -> None:
         events: list[tuple[str, dict[str, object]]] = []
