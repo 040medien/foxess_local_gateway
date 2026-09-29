@@ -303,7 +303,10 @@ MQTT discovery adds a **FoxESS Local Gateway / Connected** diagnostic entity
 and a **Telemetry Connected** entity for every inverter. The gateway entity is
 driven by the retained `foxess_m1/status` Last Will: `offline` means the daemon
 lost its broker connection, and `online` is published after reconnecting. An
-inverter's telemetry entity turns off when no telemetry has arrived for five
+unchanged MQTT client ID makes a restarted daemon replace its previous broker
+connection; the daemon also refreshes `online` every MQTT health-check interval
+while connected, recovering from a delayed offline will left by an older client.
+An inverter's telemetry entity turns off when no telemetry has arrived for five
 minutes; if the daemon itself is offline, it is unavailable instead.
 
 For Home Assistant automations that rely on generation data, require both

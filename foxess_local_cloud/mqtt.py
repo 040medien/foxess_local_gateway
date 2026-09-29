@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import socket
+from pathlib import Path
 from typing import Any, Callable
 
 from .config import MqttConfig
@@ -12,6 +15,24 @@ from .telemetry import Telemetry, supports_ac_fault_history
 DEBUG_SCALAR_TOPICS = ("0/sequence", "0/status_code")
 OPERATING_STATE_OPTIONS = ("standby", "running", "unknown")
 LEGACY_DISCOVERY_FIELDS = ("feedin_power_w",)
+
+
+def gateway_client_id(topic_prefix: str, identity: str | None = None) -> str:
+    """Keep one broker session per gateway across daemon restarts.
+
+    A replacement connection must evict the previous session before it
+    publishes online, otherwise the previous session's delayed Last Will can
+    overwrite the retained gateway status with offline.
+    """
+    if identity is None:
+        try:
+            identity = Path("/etc/machine-id").read_text(encoding="ascii").strip()
+        except OSError:
+            identity = ""
+        if not identity:
+            identity = socket.gethostname()
+    digest = hashlib.sha256(f"{identity}\0{topic_prefix}".encode("utf-8")).hexdigest()[:16]
+    return f"foxess-{digest}"
 
 
 class MqttPublisher:
@@ -27,6 +48,7 @@ class MqttPublisher:
         self.emit = emit or (lambda _event, **_fields: None)
         self.client_factory = client_factory
         self.client: Any = None
+        self._mqtt_connected = False
         self.announced: set[str] = set()
         self.model_by_serial: dict[str, str] = {}
         self.device_signature_by_serial: dict[str, tuple[str, str, str]] = {}
@@ -45,6 +67,7 @@ class MqttPublisher:
         if not self.enabled:
             return
 
+        self._mqtt_connected = False
         self.client = self.client_factory() if self.client_factory else self._default_client()
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
@@ -68,7 +91,7 @@ class MqttPublisher:
     def _default_client(self) -> Any:
         import paho.mqtt.client as mqtt
 
-        return mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        return mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=gateway_client_id(self.config.topic_prefix))
 
     def loop_is_running(self) -> bool:
         """Best-effort check that paho's network loop thread is alive.
@@ -92,6 +115,7 @@ class MqttPublisher:
     def _teardown_client(self) -> None:
         if self.client is None:
             return
+        self._mqtt_connected = False
         try:
             self.client.loop_stop()
         except Exception as exc:
@@ -108,12 +132,15 @@ class MqttPublisher:
     def ensure_connected(self) -> None:
         """Rebuild the client if the network loop is no longer running.
 
-        Driven by the daemon's watchdog. A no-op while the loop is healthy, so
-        it never fights paho's own reconnect logic for transient drops — it
-        only acts when the loop thread is gone, which paho cannot recover."""
+        Driven by the daemon's watchdog. While connected, also refresh the
+        retained online status so a stale will from a pre-upgrade client
+        cannot leave Home Assistant showing unavailable. A live loop is left
+        to paho's own reconnect logic during transient drops."""
         if not self.enabled:
             return
         if self.loop_is_running():
+            if self._mqtt_connected:
+                self._publish(f"{self.config.topic_prefix}/status", "online", retain=True)
             return
         self.emit(
             "mqtt_loop_restart",
@@ -125,7 +152,10 @@ class MqttPublisher:
         self.connect()
 
     def _on_connect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
+        if _client is not self.client:
+            return
         event = "mqtt_connected" if reason_is_success(reason_code) else "mqtt_connect_failed"
+        self._mqtt_connected = event == "mqtt_connected"
         self.emit(event, host=self.config.host, port=self.config.port, reason=str(reason_code))
         if event == "mqtt_connected" and self.client is not None:
             self._publish_gateway_discovery()
@@ -138,6 +168,9 @@ class MqttPublisher:
                     self.emit("mqtt_subscribe_error", topic=topic, error=str(exc))
 
     def _on_disconnect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
+        if _client is not self.client:
+            return
+        self._mqtt_connected = False
         self.announced.clear()
         self._active_power_limit_announced.clear()
         self.emit("mqtt_disconnected", host=self.config.host, port=self.config.port, reason=str(reason_code))
