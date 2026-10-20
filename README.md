@@ -557,6 +557,12 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-10-20
+
+- **Frames survive split start markers.** The gateway now recognizes inverter
+  frames when the two marker bytes arrive in separate TCP reads, preventing an
+  occasional missed telemetry or command frame.
+
 ### 2026-09-29
 
 - **Gateway MQTT status now recovers from stale disconnects.** A restart

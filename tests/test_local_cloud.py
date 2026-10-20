@@ -268,6 +268,27 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertTrue(is_registration(frame))
         self.assertEqual(registration_serial(frame), TEST_SERIAL)
 
+    def test_extract_frames_accepts_every_two_chunk_boundary(self) -> None:
+        frames = (
+            registration_frame(),
+            make_frame(b"\x7f\x7f", b"\x11\x01\x00\x0b", 0xE2, b"\x01\x03\xca\x5a\x00\x01", b"\xf7\xf7"),
+        )
+        for raw in frames:
+            for split in range(1, len(raw)):
+                with self.subTest(family=raw[:2].hex(), split=split):
+                    buffer = bytearray(raw[:split])
+                    self.assertEqual(extract_frames(buffer), [])
+                    buffer.extend(raw[split:])
+                    parsed = extract_frames(buffer)
+                    self.assertEqual([frame.raw for frame in parsed], [raw])
+                    self.assertEqual(buffer, bytearray())
+
+    def test_extract_frames_keeps_only_trailing_marker_byte(self) -> None:
+        for marker in (b"\x7e", b"\x7f"):
+            buffer = bytearray(b"noise" + marker)
+            self.assertEqual(extract_frames(buffer), [])
+            self.assertEqual(buffer, bytearray(marker))
+
     def test_telemetry_decode_synthetic_frame(self) -> None:
         frame = extract_frames(bytearray(telemetry_frame()))[0]
         self.assertTrue(is_telemetry(frame))
@@ -1751,6 +1772,31 @@ class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(forwarded, cloud_response_raw, "cloud's own response must pass through verbatim")
         filtered = [e for e in events if e[0] == "injected_response_filtered"]
         self.assertEqual(filtered, [], "no injection filter should fire for a cloud-originated response")
+
+    async def test_relay_decodes_and_forwards_split_start_marker(self) -> None:
+        app = FoxessLocalCloud(AppConfig())
+        events: list[tuple[str, dict[str, object]]] = []
+        app.logger.emit = lambda event, **fields: events.append((event, fields))  # type: ignore[method-assign]
+        session = Session(app, 1)
+        raw = registration_frame()
+
+        class ScriptedReader:
+            def __init__(self) -> None:
+                self.chunks = [raw[:1], raw[1:]]
+
+            async def read(self, _n: int) -> bytes:
+                return self.chunks.pop(0) if self.chunks else b""
+
+        class ClosableUpstream(FakeStreamWriter):
+            def close(self) -> None:
+                pass
+
+        upstream = ClosableUpstream()
+        await session.relay_client_to_upstream(ScriptedReader(), upstream)  # type: ignore[arg-type]
+
+        self.assertEqual(b"".join(upstream.writes), raw)
+        self.assertEqual(session.serial, TEST_SERIAL)
+        self.assertEqual(len([event for event, _ in events if event == "registration"]), 1)
 
     def test_mqtt_active_power_limit_handler_dispatches_valid_payload(self) -> None:
         events: list[tuple[str, dict[str, object]]] = []

@@ -82,7 +82,12 @@ def extract_frames(buffer: bytearray) -> list[Frame]:
     while True:
         starts = [idx for marker in (b"\x7e\x7e", b"\x7f\x7f") if (idx := buffer.find(marker)) >= 0]
         if not starts:
-            buffer.clear()
+            # A read may end after the first byte of a frame marker. Keep it
+            # so the next read can complete the marker; discard other noise.
+            if buffer and buffer[-1] in (0x7E, 0x7F):
+                del buffer[:-1]
+            else:
+                buffer.clear()
             return frames
         start_idx = min(starts)
         if start_idx:
