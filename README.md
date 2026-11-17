@@ -97,12 +97,7 @@ Tested:
 
 Not yet tested (please let me know if you were able to test it):
 
-- Newer FoxESS single-phase **hybrid** inverters (battery-equipped models in
-  the same single-phase family as the M1/Q1). The transport layer should be
-  the same, so they may work for the existing fields out of the box, but the
-  battery-related telemetry fields aren't decoded yet. **If you own one,
-  please try it and send a journald log (`sudo journalctl -u
-  foxess-local-cloud.service > foxess.log`)** so we can extend the decoder.
+- FoxESS single-phase hybrid models beyond the experimental KH7 relay support.
 - Other FoxESS inverter families (three-phase, AIO, EVO etc. — likely
   won't work without separate protocol work).
 - WEG SIW100G and FHE-MASTER rebrands. Their names and matching M1 platform
@@ -335,6 +330,9 @@ Logs:
 
 ## Cloud Relay
 
+The KH7 has experimental read-only monitoring in relay mode. For setup and
+side-by-side comparison with FoxCloud, see [Validate a KH7](docs/KH7_VALIDATION.md).
+
 Relay mode is optional.
 
 Use relay mode when you want the FoxESS Cloud/app to keep receiving data while
@@ -556,6 +554,11 @@ what Home Assistant gets.
 
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
+
+### 2026-11-17
+
+- Added experimental KH7 diagnostics in cloud relay mode. Compare candidate PV
+  and AC measurements with FoxCloud using the [KH7 validation guide](docs/KH7_VALIDATION.md).
 
 ### 2026-09-29
 
