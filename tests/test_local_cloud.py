@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import socket
@@ -558,6 +559,61 @@ class LocalCloudProtocolTest(unittest.TestCase):
 
 
 class LocalCloudServerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_kh7_relay_reports_candidates_and_forwards_original_bytes(self) -> None:
+        client = FakeMqttClient()
+        app = FoxessLocalCloud(AppConfig(mqtt=MqttConfig(host="mqtt.local")))
+        app.mqtt = MqttPublisher(app.config.mqtt, {}, client_factory=lambda: client)
+        app.mqtt.connect()
+        app.logger.emit = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        session = Session(app, 1)
+        serial = b"TESTKH7SERIAL01"
+        product = bytearray(141)
+        product[:15] = serial
+        product[93:109] = b"KH7".ljust(16)
+        sample = bytearray(425)
+        sample[:15] = serial
+        sample[37:39] = (196).to_bytes(2, "big")
+        sample[59:61] = (4982).to_bytes(2, "big")
+        sample[71:75] = (-1436).to_bytes(4, "big", signed=True)
+        info_frame = make_frame(b"\x7f\x7f", b"\x01abc", 0xF8, bytes(product), b"\xf7\xf7")
+        data_frame = make_frame(b"\x7f\x7f", b"\x02abc", 0x24, bytes(sample), b"\xf7\xf7")
+        other_sample = b"UNMATCHEDSERIAL" + bytes(sample[15:])
+        other_frame = make_frame(b"\x7f\x7f", b"\x02abc", 0x24, other_sample, b"\xf7\xf7")
+
+        class Upstream(FakeStreamWriter):
+            def close(self) -> None:
+                pass
+
+        upstream = Upstream()
+        await session.handle_frame(extract_frames(bytearray(info_frame))[0], upstream)
+        await session.handle_frame(extract_frames(bytearray(data_frame))[0], upstream)
+        state_topic = f"foxess_m1/{serial.decode()}/state"
+        self.assertFalse(any(topic == state_topic for topic, _, _ in client.published))
+        wire = data_frame + info_frame + other_frame + data_frame
+        reader = asyncio.StreamReader()
+        reader.feed_data(wire)
+        reader.feed_eof()
+        await session.relay_client_to_upstream(reader, upstream)  # type: ignore[arg-type]
+        self.assertEqual(b"".join(upstream.writes), wire)
+        states = [json.loads(payload) for topic, payload, _ in client.published if topic == state_topic]
+        self.assertEqual(len(states), 1)
+        self.assertEqual(states[0]["pv1_power_w"], 196)
+        self.assertEqual(states[0]["ac_59_frequency_hz"], 49.82)
+        self.assertEqual(states[0]["ac_71_power_w"], -1436)
+        discovery = [
+            json.loads(payload) for topic, payload, _ in client.published
+            if topic.endswith("/ac_59_frequency_hz/config")
+        ]
+        self.assertEqual(discovery[0]["entity_category"], "diagnostic")
+        self.assertNotIn("state_class", discovery[0])
+        self.assertIsNone(session.serial)
+        seen_at = app.last_telemetry_by_serial[serial.decode()]
+        availability = f"foxess_m1/{serial.decode()}/availability"
+        app._mark_stale_telemetry(seen_at + 310)
+        self.assertNotIn((availability, "offline", True), client.published)
+        app._mark_stale_telemetry(seen_at + 361)
+        self.assertIn((availability, "offline", True), client.published)
+
     async def test_telemetry_staleness_marks_inverter_offline_and_recovers(self) -> None:
         client = FakeMqttClient()
         app = FoxessLocalCloud(

@@ -18,6 +18,7 @@ from typing import Any, TextIO
 from .cert import ensure_cert
 from .config import AppConfig
 from .firmware import FirmwareCapture, FirmwareImage, FirmwareProtocolError, FirmwareUploader
+from .kh7 import Kh7Telemetry, kh7_product_serial, kh7_telemetry
 from .local_control import LocalControl, WRITE_CONFIRMED, normalize_device
 from .mqtt import MqttPublisher
 from .protocol import (
@@ -183,6 +184,7 @@ class FoxessLocalCloud:
         self._active_power_limit_gen: dict[str, int] = {}
         self._active_power_limit_confirmed_gen: dict[str, int] = {}
         self.sessions_by_serial: dict[str, Session] = {}
+        self.kh7_telemetry_serials: set[str] = set()
 
     def set_desired_active_power_limit(self, serial: str, percent: int) -> int:
         """Record a new desired setpoint and return its command generation."""
@@ -351,7 +353,8 @@ class FoxessLocalCloud:
         timeout = self.config.mqtt.telemetry_stale_after_seconds
         for serial, last_seen in tuple(self.last_telemetry_by_serial.items()):
             age = now - last_seen
-            if age < timeout or serial in self.stale_telemetry_serials:
+            serial_timeout = max(timeout, 360) if serial in self.kh7_telemetry_serials else timeout
+            if age < serial_timeout or serial in self.stale_telemetry_serials:
                 continue
             self.stale_telemetry_serials.add(serial)
             self.mqtt.publish_inverter_availability(serial, "offline")
@@ -416,6 +419,10 @@ class FoxessLocalCloud:
     def publish_telemetry(self, session_id: int, telemetry: Any, raw_nonzero_u16: dict[str, int] | None = None) -> None:
         serial = telemetry.serial
         if serial:
+            if isinstance(telemetry, Kh7Telemetry):
+                self.kh7_telemetry_serials.add(serial)
+            else:
+                self.kh7_telemetry_serials.discard(serial)
             now_monotonic = time.monotonic()
             was_stale = serial in self.stale_telemetry_serials
             self.last_telemetry_by_serial[serial] = now_monotonic
@@ -442,6 +449,7 @@ class Session:
         self.app = app
         self.session_id = session_id
         self.serial: str | None = None
+        self.kh7_serial: str | None = None
         self.model: str = ""
         self.firmware: str = ""
         self.module: str = ""
@@ -982,6 +990,18 @@ class Session:
         if not frame.valid_crc:
             self.app.logger.emit("invalid_crc", session=self.session_id, serial=self.serial or "", bytes=len(frame.raw))
             return
+        if not send_bootstrap:
+            kh7_serial = kh7_product_serial(frame)
+            if kh7_serial:
+                if self.kh7_serial != kh7_serial:
+                    self.app.logger.emit("kh7_identified", session=self.session_id, serial=kh7_serial)
+                self.kh7_serial = kh7_serial
+                return
+            if self.kh7_serial:
+                sample = kh7_telemetry(frame, self.kh7_serial)
+                if sample:
+                    self.app.publish_telemetry(self.session_id, sample)
+                    return
         # Confirm any ActivePowerLimit write awaiting this echoed response. Safe
         # for every is-ours frame; a no-op for read responses. Runs for both
         # local and relay paths (run_relay separately strips it from upstream).

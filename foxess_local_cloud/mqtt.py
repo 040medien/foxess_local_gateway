@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import MqttConfig
+from .kh7 import Kh7Telemetry
 from .telemetry import Telemetry, supports_ac_fault_history
 
 
@@ -273,7 +274,7 @@ class MqttPublisher:
         topic = self.active_power_limit_result_topic(serial)
         self._publish(topic, status, retain=self.config.retain)
 
-    def publish(self, telemetry: Telemetry) -> None:
+    def publish(self, telemetry: Telemetry | Kh7Telemetry) -> None:
         if not self.enabled or self.client is None or not telemetry.serial:
             return
         known_model = self.model_by_serial.get(telemetry.serial)
@@ -293,7 +294,8 @@ class MqttPublisher:
         state_topic = f"{self.config.topic_prefix}/{telemetry.serial}/state"
         self._publish(state_topic, json.dumps(self._state_dict(telemetry), separators=(",", ":")), retain=self.config.retain)
         self._publish(f"{self.config.topic_prefix}/{telemetry.serial}/availability", "online", retain=True)
-        self._publish_scalar_topics(telemetry)
+        if isinstance(telemetry, Telemetry):
+            self._publish_scalar_topics(telemetry)
 
     def publish_inverter_availability(self, serial: str, status: str) -> None:
         """Set the explicit per-inverter telemetry-freshness state."""
@@ -323,7 +325,7 @@ class MqttPublisher:
         topic = f"{self.config.discovery_prefix}/binary_sensor/foxess_local_gateway/connected/config"
         self._publish(topic, json.dumps(payload, separators=(",", ":")), retain=True)
 
-    def _publish_discovery(self, telemetry: Telemetry) -> None:
+    def _publish_discovery(self, telemetry: Telemetry | Kh7Telemetry) -> None:
         assert self.client is not None
         serial = telemetry.serial
         name = self.device_names.get(serial, serial)
@@ -352,8 +354,13 @@ class MqttPublisher:
                 "availability_mode": "all",
                 "device": device,
             }
+            if isinstance(telemetry, Kh7Telemetry):
+                payload["name"] = f"Experimental {friendly_field_name(field_name)}"
+                payload["entity_category"] = "diagnostic"
+                state_class = None
             if self.config.expire_after_seconds is not None:
-                payload["expire_after"] = self.config.expire_after_seconds
+                expiry = self.config.expire_after_seconds
+                payload["expire_after"] = max(expiry, 360) if isinstance(telemetry, Kh7Telemetry) else expiry
             if unit:
                 payload["unit_of_measurement"] = unit
             if device_class:
@@ -363,6 +370,8 @@ class MqttPublisher:
             if state_class:
                 payload["state_class"] = state_class
             self._publish(config_topic, json.dumps(payload, separators=(",", ":")), retain=True)
+        if isinstance(telemetry, Kh7Telemetry):
+            return
         self._publish_running_discovery(telemetry, device, state_topic)
         if supports_ac_fault_history(model):
             self._publish_fault_discovery(telemetry, device, state_topic)
@@ -592,7 +601,7 @@ class MqttPublisher:
         topic = f"{self.config.discovery_prefix}/binary_sensor/foxess_{serial}/telemetry_connected/config"
         self._publish(topic, json.dumps(payload, separators=(",", ":")), retain=True)
 
-    def _state_dict(self, telemetry: Telemetry) -> dict[str, Any]:
+    def _state_dict(self, telemetry: Telemetry | Kh7Telemetry) -> dict[str, Any]:
         state = telemetry.as_dict()
         if self.config.debug:
             return state
