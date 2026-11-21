@@ -280,6 +280,16 @@ class LocalCloudProtocolTest(unittest.TestCase):
         self.assertEqual(telemetry.operating_state, "running")
         self.assertEqual(telemetry.operating_state_code, 4)
 
+    def test_telemetry_decodes_signed_inverter_temperature(self) -> None:
+        for raw, expected in ((-20, -0.62), (0, 0.0), (39, 1.22)):
+            with self.subTest(raw=raw):
+                payload = bytearray(telemetry_payload())
+                payload[62:64] = raw.to_bytes(2, "big", signed=True)
+
+                telemetry = decode_telemetry(bytes(payload), TEST_SERIAL, "M1-800-E")
+
+                self.assertEqual(telemetry.inverter_temperature_c, expected)
+
     def test_generation_uses_word_swapped_u32_counter(self) -> None:
         payload = bytearray(telemetry_payload())
         payload[70:72] = (1).to_bytes(2, "big")
