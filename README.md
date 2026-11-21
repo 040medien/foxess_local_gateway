@@ -557,6 +557,11 @@ what Home Assistant gets.
 Dated, newest first. Only user-facing changes are listed — for the full
 history including refactors and internal scaffolding, see the git log.
 
+### 2026-11-21
+
+- **Subzero inverter temperatures display correctly.** Negative readings no
+  longer appear as spikes around 2,048 °C in Home Assistant.
+
 ### 2026-09-29
 
 - **Gateway MQTT status now recovers from stale disconnects.** A restart

@@ -241,7 +241,7 @@ def decode_telemetry(
         pv4_power_w=pv4_power_w if include_pv34 else None,
         pv4_voltage_v=pv4_voltage_v if include_pv34 else None,
         pv4_current_a=pv4_current_a if include_pv34 else None,
-        inverter_temperature_c=round(u16(payload, 62) / 32.0, 2),
+        inverter_temperature_c=round(s16(payload, 62) / 32.0, 2),
         generation_kwh=round(u32_wordswapped(payload, 70) / 128.0, 3),
         export_total_kwh=round(u32_wordswapped(payload, 74) / 128.0, 3),
         fault_active=fault_active,
